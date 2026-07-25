@@ -1,98 +1,290 @@
 # IOC Detection Engine
 
-A Python-based security detection project that analyses SSH authentication logs, correlates login behaviour with threat intelligence indicators, and generates structured security alerts.
+A Python-based, multi-source security detection engine that analyses Ubuntu SSH authentication logs and Cowrie honeypot events, correlates attacker behaviour, enriches incidents with threat intelligence, and generates explainable security alerts.
 
-The engine was developed in an isolated Ubuntu and Kali Linux lab environment to demonstrate practical detection engineering, log analysis, IOC correlation, MITRE ATT&CK mapping, and security alert generation.
+The project was developed in an isolated Linux lab to demonstrate practical detection engineering, threat intelligence enrichment, event normalisation, incident correlation, MITRE ATT&CK mapping, risk scoring, testing, and analyst-focused reporting.
 
 ---
 
 ## Project Overview
 
-The IOC Detection Engine processes SSH authentication logs and identifies suspicious activity such as:
+Security telemetry often arrives in different formats and from different tools. A Linux authentication log and a honeypot JSON event may describe related attacker activity, but they cannot be analysed consistently until they are normalised.
 
-- repeated failed login attempts
-- SSH brute-force behaviour
-- successful authentication following multiple failures
-- activity originating from known suspicious IP addresses
-- potentially compromised accounts
+The IOC Detection Engine converts Ubuntu SSH and Cowrie events into a shared security-event model and then:
 
-Instead of generating one alert for every log entry, the engine groups related activity by source IP address and produces consolidated alerts containing severity, classification, evidence, and recommended investigation context.
+1. ingests events from multiple telemetry sources
+2. normalises them into a common schema
+3. groups activity by source IP address
+4. correlates related events within five-minute incident windows
+5. detects suspicious authentication behaviour
+6. matches source IPs against lifecycle-aware IOC intelligence
+7. calculates an explainable incident risk score
+8. maps activity to MITRE ATT&CK
+9. suppresses repeated incidents using persistent deduplication
+10. generates terminal, CSV, and JSON outputs
+
+The result is a structured incident containing evidence, source context, severity, risk factors, IOC intelligence, ATT&CK techniques, and event counts.
 
 ---
 
-## Detection Workflow
+## Key Capabilities
+
+- Multi-source event ingestion
+- Ubuntu SSH authentication log parsing
+- Cowrie honeypot JSONL event parsing
+- Shared security-event normalisation
+- Source IP grouping
+- Five-minute incident correlation
+- Cross-source incident correlation
+- Out-of-order timestamp handling
+- Malformed-event isolation
+- SSH brute-force detection
+- Repeated authentication-failure detection
+- Successful login after repeated failures
+- Known malicious IOC detection
+- Lifecycle-aware IOC enrichment
+- Explainable numeric risk scoring
+- Severity and classification assignment
+- MITRE ATT&CK mapping
+- Persistent incident deduplication
+- Terminal, CSV, and JSON outputs
+- Evidence preservation
+- Automated unit testing
+
+---
+
+## Architecture
 
 ```text
-SSH Authentication Logs
-          |
-          v
-   Log Parsing Engine
-          |
-          v
-Source IP Extraction
-          |
-          +----------------------+
-          |                      |
-          v                      v
-Behaviour Analysis        IOC Feed Matching
-          |                      |
-          +----------+-----------+
-                     |
-                     v
-              Alert Classification
-                     |
-                     v
-          Terminal and CSV Output
+ Ubuntu Authentication Logs          Cowrie Honeypot JSONL
+             |                                  |
+             v                                  v
+   Ubuntu Log Normalisation           Cowrie Event Normalisation
+             |                                  |
+             +----------------+-----------------+
+                              |
+                              v
+                  Shared SecurityEvent Model
+                              |
+                              v
+                    Group Events by Source IP
+                              |
+                              v
+                  Five-Minute Correlation Windows
+                              |
+                +-------------+-------------+
+                |                           |
+                v                           v
+       Behavioural Detection          IOC Intelligence Match
+                |                           |
+                +-------------+-------------+
+                              |
+                              v
+                 Explainable Risk Scoring
+                              |
+                              v
+                Classification and ATT&CK Mapping
+                              |
+                              v
+                  Persistent Deduplication
+                              |
+                +-------------+-------------+
+                |             |             |
+                v             v             v
+             Terminal        CSV           JSON
 ```
-
-The engine performs the following steps:
-
-1. Reads SSH authentication logs
-2. Extracts source IP addresses
-3. Identifies failed and successful login events
-4. Groups events by source IP
-5. Compares observed IP addresses with a local IOC feed
-6. Correlates repeated failures with later successful authentication
-7. Assigns severity and attack classification
-8. Maps relevant activity to MITRE ATT&CK
-9. Writes structured alerts to CSV
 
 ---
 
-## Key Features
+## Normalised Security Event Model
 
-- Python-based SSH log analysis
-- IOC matching using a local JSON threat feed
-- Event grouping by source IP address
-- Failed and successful login counting
-- SSH brute-force detection
-- Detection of successful login following repeated failures
-- Severity-based alert classification
-- MITRE ATT&CK mapping
-- Evidence preservation
-- CSV alert generation
-- Support for sample and real Ubuntu authentication logs
-- Privacy controls through `.gitignore`
+Different log formats are converted into a shared event structure:
+
+```python
+SecurityEvent(
+    timestamp,
+    source_ip,
+    event_type,
+    username,
+    source,
+    destination_port,
+    protocol,
+    raw_log,
+)
+```
+
+Normalised event types include:
+
+- `authentication_failure`
+- `authentication_success`
+- `command_executed`
+- `session_closed`
+
+This allows correlation and detection logic to operate independently of the original log format.
+
+---
+
+## Supported Data Sources
+
+### Ubuntu SSH Authentication Logs
+
+The engine parses:
+
+- failed password attempts
+- invalid-user authentication attempts
+- successful SSH logins
+
+Example:
+
+```text
+Jul 17 10:00:30 ubuntu sshd[7001]: Failed password for root from 45.141.215.90 port 50200 ssh2
+```
+
+### Cowrie Honeypot Events
+
+The engine processes:
+
+- `cowrie.login.failed`
+- `cowrie.login.success`
+- `cowrie.command.input`
+- `cowrie.session.closed`
+
+Example:
+
+```json
+{
+  "eventid": "cowrie.command.input",
+  "src_ip": "45.141.215.90",
+  "input": "uname -a",
+  "timestamp": "2026-07-17T10:03:00.000000Z"
+}
+```
 
 ---
 
 ## Detection Scenarios
 
-### Repeated Login Failures
+### Repeated Authentication Failures
 
-Multiple failed authentication attempts from the same IP may indicate password guessing or brute-force activity.
+Multiple failed logins from the same source IP may indicate password guessing, credential stuffing, or SSH brute-force activity.
 
-### IOC Match
+### IOC-Matched Activity
 
-Observed IP addresses are compared with a local list of known suspicious indicators.
+Observed source IPs are compared against an active IOC feed. An IOC match increases incident confidence and risk, but is not treated as proof of compromise by itself.
 
-An IOC match provides additional threat context but is not treated as proof of compromise by itself.
+### Successful Login After Failures
 
-### Brute Force Followed by Successful Login
+A successful authentication following repeated failures is classified as critical because it may indicate compromised or discovered credentials.
 
-When repeated failed attempts are followed by successful authentication from the same IP, the engine classifies the event as a critical security alert.
+### Cross-Source Activity
 
-This pattern may indicate that valid credentials were discovered or compromised.
+Ubuntu and Cowrie events are correlated when they originate from the same source IP and occur within the same five-minute incident window.
+
+### Post-Authentication Command Activity
+
+Cowrie command events provide evidence of attacker behaviour after authentication. This raises incident risk because it demonstrates activity beyond the initial login attempt.
+
+---
+
+## Incident Correlation
+
+Events are grouped by source IP and divided into five-minute incident windows.
+
+The engine handles:
+
+- events arriving out of chronological order
+- timestamps with different timezone formats
+- malformed timestamps
+- events with missing timestamps
+- multiple incidents from the same source IP
+- events from different telemetry sources
+
+Malformed or timestamp-less events are isolated rather than crashing the pipeline.
+
+---
+
+## Cross-Source Correlation Example
+
+```json
+{
+  "source_ip": "45.141.215.90",
+  "sources": [
+    "cowrie",
+    "ubuntu_auth"
+  ],
+  "cross_source": true
+}
+```
+
+This indicates that the same source IP was observed across multiple telemetry sources inside one correlation window.
+
+---
+
+## Explainable Risk Scoring
+
+| Risk factor | Points |
+|---|---:|
+| Failed authentication attempts | +10 each, capped at +30 |
+| Successful login after failures | +30 |
+| Active IOC match | +25 |
+| Activity across multiple sources | +15 |
+| Post-authentication command activity | +10 |
+
+The final score is capped at 100.
+
+| Score | Level |
+|---:|---|
+| 0 to 9 | LOW |
+| 10 to 29 | MEDIUM |
+| 30 to 49 | HIGH |
+| 50 to 100 | CRITICAL |
+
+Example:
+
+```json
+{
+  "risk": {
+    "score": 100,
+    "level": "CRITICAL",
+    "factors": [
+      "3 failed authentication attempts: +30",
+      "Successful login after failures: +30",
+      "Active IOC match: +25",
+      "Activity observed across 2 sources: +15",
+      "Post-authentication command activity: +10"
+    ]
+  }
+}
+```
+
+The factors show exactly why an incident received its score.
+
+---
+
+## IOC Intelligence and Lifecycle Management
+
+Indicators are stored in `data/iocs.json`.
+
+Supported context includes:
+
+- indicator value and type
+- intelligence source
+- confidence
+- source reliability
+- tags
+- first-seen and last-seen timestamps
+- active status
+- expiry timestamp
+
+The engine excludes indicators that are inactive, expired, incorrectly structured, missing required fields, or contain invalid expiry timestamps.
+
+---
+
+## Persistent Incident Deduplication
+
+The engine creates a stable fingerprint for each incident. Previously generated incidents are stored in `alerts/dedup-state.json`.
+
+Repeated incidents detected within the configured cooldown period are suppressed, while similar activity can create a new incident after the cooldown expires.
 
 ---
 
@@ -105,112 +297,33 @@ This pattern may indicate that valid credentials were discovered or compromised.
 
 ---
 
-## Project Structure
+## Example Incident
 
-```text
-ioc-detection-engine/
-├── alerts/
-│   ├── alerts.csv
-│   └── sample-alerts.csv
-├── data/
-│   └── iocs.json
-├── docs/
-│   ├── architecture.md
-│   ├── lessons-learned.md
-│   ├── setup-guide.md
-│   ├── testing.md
-│   └── screenshots/
-├── logs/
-│   ├── auth.log
-│   ├── real-auth.log
-│   └── sample-auth.log
-├── notes/
-│   ├── misp-notes.md
-│   ├── mitre-notes.md
-│   └── stix-taxii-notes.md
-├── src/
-│   └── main.py
-├── .gitignore
-├── PROJECT_MASTER.md
-└── README.md
-```
-
-Real authentication logs and generated production alerts are excluded from Git tracking.
-
----
-
-## Requirements
-
-- Ubuntu or another Linux environment
-- Python 3
-- Git
-
-No external Python packages are currently required.
-
-Check Python:
-
-```bash
-python3 --version
-```
-
----
-
-## Running the Engine
-
-Clone the repository:
-
-```bash
-git clone <repository-url>
-cd ioc-detection-engine
-```
-
-Run the detection engine:
-
-```bash
-python3 src/main.py
-```
-
-Detailed setup instructions are available in:
-
-```text
-docs/setup-guide.md
-```
-
----
-
-## Example Alert
-
-```text
-ALERT #1
-
-Source IP: 192.168.56.101
-Failed Attempts: 3
-Successful Logins: 1
-Severity: CRITICAL
-Classification: Brute Force → Successful Login
-MITRE ATT&CK: T1110, T1078
-```
-
-This alert indicates that the same source IP generated repeated failed login attempts and later authenticated successfully.
-
----
-
-## Inputs
-
-### SSH Log File
-
-The engine can analyse:
-
-- controlled sample logs
-- copied Ubuntu authentication logs
-- simulated SSH attack activity
-
-### IOC Feed
-
-Suspicious source IP addresses are stored in:
-
-```text
-data/iocs.json
+```json
+{
+  "incident_id": "INC-0003",
+  "source_ip": "45.141.215.90",
+  "sources": [
+    "cowrie",
+    "ubuntu_auth"
+  ],
+  "cross_source": true,
+  "risk": {
+    "score": 100,
+    "level": "CRITICAL"
+  },
+  "event_counts": {
+    "failed_logins": 3,
+    "successful_logins": 1,
+    "total_events": 6
+  },
+  "severity": "CRITICAL",
+  "classification": "Brute Force → Successful Login",
+  "mitre_attack": [
+    "T1110",
+    "T1078"
+  ]
+}
 ```
 
 ---
@@ -219,109 +332,163 @@ data/iocs.json
 
 The engine produces:
 
-- terminal alert summaries
-- severity classification
-- attack classification
-- supporting log evidence
-- MITRE ATT&CK mapping
-- structured CSV alerts
+- human-readable terminal alerts
+- structured CSV alerts in `alerts/alerts.csv`
+- detailed JSON incidents in `alerts/incidents.json`
 
-Example output:
+JSON incidents include the incident ID, timestamps, source IP, telemetry sources, cross-source status, risk score, risk factors, IOC context, event counts, severity, classification, ATT&CK techniques, and raw evidence.
+
+---
+
+## Project Structure
 
 ```text
-alerts/sample-alerts.csv
+ioc-detection-engine/
+├── alerts/
+├── data/
+│   └── iocs.json
+├── docs/
+├── logs/
+│   ├── sample-auth.log
+│   └── sample-cowrie.jsonl
+├── notes/
+├── src/
+│   ├── main.py
+│   └── normalization.py
+├── tests/
+│   ├── test_main.py
+│   └── test_normalization.py
+├── .gitignore
+├── PROJECT_MASTER.md
+└── README.md
 ```
 
-The generated `alerts/alerts.csv` file is ignored by Git.
+---
+
+## Requirements
+
+- Python 3.10 or later
+- Linux environment recommended
+- Git
+
+No external Python libraries are required.
+
+---
+
+## Running the Engine
+
+```bash
+git clone <repository-url>
+cd ioc-detection-engine
+python3 -m src.main
+```
+
+The engine reads:
+
+- `logs/sample-auth.log`
+- `logs/sample-cowrie.jsonl`
+- `data/iocs.json`
+
+Generated output is written to:
+
+- `alerts/alerts.csv`
+- `alerts/incidents.json`
+- `alerts/dedup-state.json`
 
 ---
 
 ## Testing
 
-The engine was tested using both controlled sample logs and genuine Ubuntu authentication logs from an isolated lab.
+Run:
 
-Validated scenarios include:
+```bash
+python3 -m unittest discover -s tests -v
+```
 
-- IOC-matched failed login
-- repeated authentication failures
-- brute force followed by successful login
-- real SSH activity from a Kali Linux system
-- CSV alert generation
-- evidence output limiting
-
-Full testing documentation is available in:
+Current status:
 
 ```text
-docs/testing.md
+57 automated tests passing
 ```
+
+Coverage includes parsing, normalisation, malformed-data handling, grouping, event correlation, cross-source correlation, behavioural classification, IOC lifecycle validation, enrichment, incident generation, risk scoring, deduplication, and CSV output.
 
 ---
 
 ## Security and Privacy
 
-This project is intended for authorised lab and defensive security use.
+This project is intended only for authorised lab, learning, and defensive security use.
 
-Security measures include:
+Controls include:
 
 - excluding real authentication logs from Git
-- excluding generated alert files
-- avoiding credentials and API keys
-- using controlled sample evidence for demonstrations
+- excluding generated alert files where appropriate
+- avoiding credentials, passwords, and API keys
+- using controlled sample evidence
 - separating detection from automated response
-- documenting the risk of false positives
+- documenting false-positive risks
+- preserving raw evidence for investigation
+- validating IOC records before use
 
 ---
 
 ## Current Limitations
 
-- static local IOC feed
-- stored log-file processing
-- no continuous real-time monitoring
-- no time-window-based event correlation
-- no automatic MISP integration
-- no external threat intelligence enrichment
-- no dashboard
-- no automated response controls
+- IOC intelligence is loaded from a local JSON file
+- processing is batch-based rather than continuous
+- correlation is based primarily on source IP and time
+- no direct MISP or OpenCTI API integration
+- no STIX 2.1 or TAXII exchange
+- no external enrichment APIs
+- no analyst dashboard
+- no automated containment or response
+- risk weights are rule-based
+- only Ubuntu SSH and selected Cowrie event types are supported
 
 ---
 
-## Planned Improvements
+## Roadmap
 
-- real-time log monitoring
-- time-window correlation
+- STIX 2.1 indicator ingestion
+- TAXII collection support
 - MISP integration
-- STIX and TAXII support
+- OpenCTI integration
 - external IOC enrichment
-- JSON alert output
-- command-line configuration
-- unit testing
-- alert deduplication
+- configurable correlation rules
+- configurable risk weights
+- alert lifecycle and analyst status
 - trusted-IP allowlisting
+- continuous log monitoring
+- additional honeypot event types
+- broader identity-abuse detections
 - dashboard visualisation
-- controlled automated response
+- CI test automation
+- controlled response playbooks
 
 ---
 
 ## Skills Demonstrated
 
-- Python
-- Linux
-- SSH log analysis
+- Python and Linux
 - detection engineering
-- threat intelligence
-- IOC correlation
-- MITRE ATT&CK
+- security event normalisation
+- multi-source telemetry ingestion
+- behavioural detection
+- event correlation
+- threat intelligence and IOC enrichment
+- MITRE ATT&CK mapping
 - incident triage
-- CSV and JSON handling
-- Git version control
-- security documentation
+- explainable risk scoring
+- alert deduplication
+- JSON and CSV processing
+- automated unit testing
+- Git and GitHub
+- technical documentation
 - defensive security testing
 
 ---
 
 ## Documentation
-
-Additional technical documentation is available in:
 
 - `PROJECT_MASTER.md`
 - `docs/architecture.md`
@@ -335,5 +502,4 @@ Additional technical documentation is available in:
 
 **Kaartheeswaran Ravichandran**
 
-Master of Cybersecurity student focused on security operations, detection engineering, threat intelligence, and incident response.
-
+Cybersecurity professional focused on security operations, detection engineering, threat intelligence, incident response, and defensive security automation.
