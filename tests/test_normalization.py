@@ -409,6 +409,52 @@ class TestNormalizedEventProcessing(unittest.TestCase):
             ],
         )
 
+    def test_cross_source_events_share_window(self):
+        events = [
+            SecurityEvent(
+                timestamp="2026-07-17T10:00:00",
+                source_ip="45.141.215.90",
+                event_type="authentication_failure",
+                username="root",
+                source="ubuntu_auth",
+                destination_port=22,
+                protocol="ssh",
+                raw_log="ubuntu failure",
+            ),
+            SecurityEvent(
+                timestamp="2026-07-17T10:01:00+00:00",
+                source_ip="45.141.215.90",
+                event_type="authentication_failure",
+                username="admin",
+                source="cowrie",
+                destination_port=22,
+                protocol="ssh",
+                raw_log="cowrie failure",
+            ),
+        ]
+
+        windows = create_normalized_event_windows(
+            events
+        )
+
+        self.assertEqual(
+            len(windows),
+            1,
+        )
+
+        sources = {
+            event.source
+            for event in windows[0]
+        }
+
+        self.assertEqual(
+            sources,
+            {
+                "ubuntu_auth",
+                "cowrie",
+            },
+        )
+
 class TestCowrieNormalization(unittest.TestCase):
     def test_failed_login_is_normalized(self):
         event_data = {

@@ -16,3 +16,4 @@ INVALID-TIME ubuntu sshd[5001]: Failed password for root from 10.10.10.80 port 4
 Apr 28 14:00:00 ubuntu sshd[6001]: Failed password for root from 10.10.10.90 port 44001 ssh2
 INVALID-TIME ubuntu sshd[6002]: Failed password for admin from 10.10.10.90 port 44002 ssh2
 Apr 28 14:02:00 ubuntu sshd[6003]: Failed password for test from 10.10.10.90 port 44003 ssh2
+Jul 17 10:00:30 ubuntu sshd[7001]: Failed password for root from 45.141.215.90 port 50200 ssh2
