@@ -597,6 +597,72 @@ def get_incident_time_range(
         timestamps[-1].isoformat(),
     )
 
+def calculate_risk_score(
+    is_ioc_match: bool,
+    failed: int,
+    successful: int,
+    sources: list[str] | None,
+    logs: list[str],
+) -> tuple[int, str, list[str]]:
+    """Calculate an explainable incident risk score."""
+
+    score = 0
+    factors: list[str] = []
+
+    failed_points = min(failed * 10, 30)
+
+    if failed_points > 0:
+        score += failed_points
+        factors.append(
+            f"{failed} failed authentication attempts: "
+            f"+{failed_points}"
+        )
+
+    if failed > 0 and successful > 0:
+        score += 30
+        factors.append(
+            "Successful login after failures: +30"
+        )
+
+    if is_ioc_match:
+        score += 25
+        factors.append(
+            "Active IOC match: +25"
+        )
+
+    unique_sources = sorted(
+        set(sources or [])
+    )
+    if len(unique_sources) > 1:
+        score += 15
+        factors.append(
+            "Activity observed across "
+            f"{len(unique_sources)} sources: +15"
+        )
+
+    command_activity = any(
+        "cowrie.command.input" in log
+        for log in logs
+    )
+
+    if command_activity:
+        score += 10
+        factors.append(
+            "Post-authentication command activity: +10"
+        )
+
+    score = min(score, 100)
+
+    if score >= 50:
+        level = "CRITICAL"
+    elif score >= 30:
+        level = "HIGH"
+    elif score >= 10:
+        level = "MEDIUM"
+    else:
+        level = "LOW"
+
+    return score, level, factors
 
 def build_incident_record(
     alert_id: int,
@@ -618,7 +684,16 @@ def build_incident_record(
     )
     unique_sources = sorted(
         set(sources or [])
-    )        
+    )
+    risk_score, risk_level, risk_factors = (
+        calculate_risk_score(
+            is_ioc_match=is_ioc_match,
+            failed=failed,
+            successful=successful,
+            sources=unique_sources,
+            logs=logs,
+        )
+    ) 
     ioc_context = {
         "matched": is_ioc_match,
         "value": None,
@@ -678,6 +753,11 @@ def build_incident_record(
         "cross_source": (
             len(unique_sources) > 1
         ),
+        "risk": {
+            "score": risk_score,
+            "level": risk_level,
+            "factors": risk_factors,
+        },
         "ioc": ioc_context,
         "time_window": {
             "start": start_time,

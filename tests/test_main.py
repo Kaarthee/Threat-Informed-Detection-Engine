@@ -15,6 +15,7 @@ from src.main import (
     get_incident_time_range,
     is_duplicate_incident,
     load_iocs,
+    calculate_risk_score,
     parse_log_timestamp,
     write_csv_header,
 )
@@ -674,6 +675,90 @@ class TestIocEnrichmentOutput(unittest.TestCase):
                 column,
                 header,
             )
+class TestExplainableRiskScoring(unittest.TestCase):
+
+    def test_basic_login_failures_are_medium_risk(self):
+        score, level, factors = calculate_risk_score(
+            is_ioc_match=False,
+            failed=2,
+            successful=0,
+            sources=["ubuntu_auth"],
+            logs=["Failed password"],
+        )
+
+        self.assertEqual(score, 20)
+        self.assertEqual(level, "MEDIUM")
+        self.assertIn(
+            "2 failed authentication attempts: +20",
+            factors,
+        )
+
+    def test_ioc_matched_failure_is_high_risk(self):
+        score, level, factors = calculate_risk_score(
+            is_ioc_match=True,
+            failed=1,
+            successful=0,
+            sources=["ubuntu_auth"],
+            logs=["Failed password"],
+        )
+
+        self.assertEqual(score, 35)
+        self.assertEqual(level, "HIGH")
+        self.assertIn(
+            "Active IOC match: +25",
+            factors,
+        )
+
+    def test_cross_source_compromise_is_critical(self):
+        logs = [
+            "Ubuntu authentication failure",
+            (
+                '{"eventid": '
+                '"cowrie.command.input"}'
+            ),
+        ]
+
+        score, level, factors = calculate_risk_score(
+            is_ioc_match=True,
+            failed=3,
+            successful=1,
+            sources=[
+                "ubuntu_auth",
+                "cowrie",
+            ],
+            logs=logs,
+        )
+
+        self.assertEqual(score, 100)
+        self.assertEqual(level, "CRITICAL")
+        self.assertIn(
+            "Successful login after failures: +30",
+            factors,
+        )
+        self.assertIn(
+            "Activity observed across 2 sources: +15",
+            factors,
+        )
+        self.assertIn(
+            "Post-authentication command activity: +10",
+            factors,
+        )
+
+    def test_failed_attempt_points_are_capped(self):
+        score, level, factors = calculate_risk_score(
+            is_ioc_match=False,
+            failed=20,
+            successful=0,
+            sources=["ubuntu_auth"],
+            logs=[],
+        )
+
+        self.assertEqual(score, 30)
+        self.assertEqual(level, "HIGH")
+        self.assertIn(
+            "20 failed authentication attempts: +30",
+            factors,
+        )
 
 if __name__ == "__main__":
     unittest.main()
