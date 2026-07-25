@@ -218,7 +218,72 @@ class TestIncidentJsonModel(unittest.TestCase):
             "CRITICAL",
         )
 
+    def test_single_source_incident_context(self):
+        incident = build_incident_record(
+            alert_id=20,
+            generated_at="2026-07-17 12:30:00",
+            ip="192.168.1.10",
+            is_ioc_match=False,
+            failed=2,
+            successful=0,
+            severity="MEDIUM",
+            classification="Login Failures",
+            mitre="T1110",
+            logs=[
+                (
+                    "Apr 28 10:00:00 ubuntu sshd[1]: "
+                    "Failed password"
+                )
+            ],
+            sources=["ubuntu_auth"],
+        )
 
+        self.assertEqual(
+            incident["sources"],
+            ["ubuntu_auth"],
+        )
+        self.assertFalse(
+            incident["cross_source"]
+        )
+
+    def test_cross_source_incident_context(self):
+        incident = build_incident_record(
+            alert_id=21,
+            generated_at="2026-07-17 12:35:00",
+            ip="45.141.215.90",
+            is_ioc_match=True,
+            failed=3,
+            successful=1,
+            severity="CRITICAL",
+            classification="Brute Force → Successful Login",
+            mitre="T1110, T1078",
+            logs=[
+                (
+                    "Apr 28 10:00:00 ubuntu sshd[1]: "
+                    "Failed password"
+                ),
+                (
+                    '{"eventid":"cowrie.login.failed",'
+                    '"src_ip":"45.141.215.90"}'
+                ),
+            ],
+            sources=[
+                "ubuntu_auth",
+                "cowrie",
+                "cowrie",
+            ],
+        )
+
+        self.assertEqual(
+            incident["sources"],
+            [
+                "cowrie",
+                "ubuntu_auth",
+            ],
+        )
+        self.assertTrue(
+            incident["cross_source"]
+        )
 class TestDeduplication(unittest.TestCase):
     def test_fingerprint_is_stable(self):
         incident = {

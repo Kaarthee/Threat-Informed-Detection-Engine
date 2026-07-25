@@ -610,12 +610,15 @@ def build_incident_record(
     mitre: str,
     logs: list[str],
     ioc_record: dict | None = None,
+    sources: list[str] | None = None,
 ) -> dict:
     """Build a structured enriched JSON incident record."""
     start_time, end_time = (
         get_incident_time_range(logs)
     )
-
+    unique_sources = sorted(
+        set(sources or [])
+    )        
     ioc_context = {
         "matched": is_ioc_match,
         "value": None,
@@ -671,6 +674,10 @@ def build_incident_record(
         "incident_id": f"INC-{alert_id:04d}",
         "generated_at": generated_at,
         "source_ip": ip,
+        "sources": unique_sources,
+        "cross_source": (
+            len(unique_sources) > 1
+        ),
         "ioc": ioc_context,
         "time_window": {
             "start": start_time,
@@ -965,7 +972,12 @@ def main() -> None:
                     incident_logs
                 )
             )
-
+            incident_sources = sorted(
+                {
+                    event.source
+                    for event in incident_logs
+                }
+            )
             if not should_alert(
                 failed,
                 successful,
@@ -1007,6 +1019,7 @@ def main() -> None:
                     mitre,
                     raw_logs,
                     ioc_record,
+                    incident_sources,
                 )
             )
 
