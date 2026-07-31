@@ -1,266 +1,425 @@
 # Lessons Learned
 
+## Overview
+
+The IOC Detection Engine began as a simple SSH log and IOC-matching project. It evolved into a multi-source detection pipeline that ingests Ubuntu authentication logs and Cowrie honeypot events, normalises telemetry, correlates activity, enriches incidents with IOC context, calculates explainable risk, and produces structured outputs.
+
+The most important lesson was that useful detection is not created by a single rule or indicator. It depends on context, correlation, evidence quality, and the ability to explain why an incident matters.
+
+---
+
 ## Technical Lessons
 
 ### 1. Detection quality depends on context
 
-A failed SSH login alone does not always indicate a serious attack.
+A failed SSH login by itself does not always indicate a serious attack.
 
-The risk becomes higher when additional context is present, such as:
+Risk increases when additional evidence is present, such as:
 
-- repeated failed attempts
+- repeated failures
 - multiple usernames targeted
 - a later successful login
-- a known malicious source IP
-- suspicious activity after authentication
+- an active malicious IOC match
+- activity across multiple telemetry sources
+- post-authentication command execution
 
-This showed that effective detection requires correlation rather than checking isolated log lines.
+This showed that effective detection requires correlation rather than isolated log matching.
 
 ---
 
 ### 2. IOC matching alone is not enough
 
-A source IP appearing in an IOC feed can be useful, but it should not automatically be treated as a confirmed compromise.
+A source IP appearing in an IOC feed is useful context, but it should not automatically be treated as confirmed compromise.
 
-IOC information can be:
+IOC data can be outdated, inactive, expired, inaccurate, reused by legitimate infrastructure, or missing behavioural context.
 
-- outdated
-- incomplete
-- inaccurate
-- reused by legitimate services
-- missing context
-
-The engine therefore combines IOC matching with observed authentication behaviour.
+The engine therefore combines IOC intelligence with observed behaviour, time correlation, source context, and event evidence.
 
 ---
 
-### 3. Grouping events improves alert quality
+### 3. Normalisation is the foundation of multi-source detection
 
-The first versions of the engine created separate alerts for individual log lines.
+Ubuntu authentication logs and Cowrie JSONL events use different formats and fields.
 
-This produced duplicate and noisy output.
+Without normalisation, each source would require separate correlation and detection logic.
 
-The engine was improved to group activity by source IP and generate a consolidated alert containing:
+The shared `SecurityEvent` model allowed both sources to be processed consistently using:
+
+- timestamp
+- source IP
+- event type
+- username
+- source
+- destination port
+- protocol
+- raw evidence
+
+This made the detection logic independent of the original telemetry format and created a foundation for adding more sources later.
+
+---
+
+### 4. Timestamp handling is harder than it first appears
+
+Ubuntu timestamps were parsed as timezone-naive values, while Cowrie timestamps were timezone-aware UTC values.
+
+Attempting to sort them directly caused failures.
+
+The solution was to convert timezone-aware timestamps to naive UTC before correlation.
+
+This highlighted several important lessons:
+
+- timestamp formats must be standardised before sorting
+- timezone assumptions must be explicit
+- out-of-order events must be handled
+- malformed timestamps should be isolated rather than crash the pipeline
+
+Time handling is a core detection-engineering problem, not a minor parsing detail.
+
+---
+
+### 5. Correlation windows require clear semantics
+
+The engine uses five-minute incident windows.
+
+This helped separate related activity from unrelated events, but it also revealed important design decisions:
+
+- events exactly five minutes apart may remain in one window
+- events beyond the boundary start a new incident
+- events from the same IP months apart must not be merged
+- malformed or missing timestamps need separate handling
+
+The correlation window improved alert quality, but the value is still a rule-based choice that may need configuration in production.
+
+---
+
+### 6. Cross-source correlation increases confidence
+
+The same source IP was observed in both Ubuntu and Cowrie telemetry inside the same five-minute window.
+
+This produced a real cross-source incident containing:
+
+- Ubuntu failed-login evidence
+- Cowrie failed-login evidence
+- Cowrie successful-login evidence
+- Cowrie command execution
+- Cowrie session closure
+
+Cross-source confirmation increased confidence because the activity was supported by independent telemetry sources.
+
+---
+
+### 7. Grouping events improves alert quality
+
+Early versions of the engine treated events too independently.
+
+Grouping activity by source IP and incident window allowed the engine to produce consolidated incidents containing:
 
 - failed-login count
 - successful-login count
-- classification
+- source context
+- IOC enrichment
 - severity
+- classification
+- risk score
+- ATT&CK mapping
 - supporting evidence
 
-This produced clearer and more useful alerts.
+This reduced alert noise and improved analyst readability.
 
 ---
 
-### 4. Failed logins followed by success require higher severity
+### 8. Successful login after failures is a high-value detection pattern
 
-Repeated failures followed by a successful login may indicate that an attacker discovered valid credentials.
+Repeated failures followed by a successful login may indicate that an attacker discovered or compromised valid credentials.
 
-This pattern was classified as Critical and mapped to:
+The engine classified this pattern as critical and mapped it to:
 
-- T1110 - Brute Force
-- T1078 - Valid Accounts
+- T1110 Brute Force
+- T1078 Valid Accounts
 
-This was more meaningful than treating every failed login as the same level of risk.
-
----
-
-### 5. Large logs require evidence filtering
-
-Real authentication logs contained hundreds of related events.
-
-Displaying every matching line made the terminal output difficult to review.
-
-The engine was changed to display only the latest evidence entries and show how many additional records were hidden.
-
-This improved readability without discarding the underlying evidence stored in the source log.
+This pattern was more meaningful than treating every failed login with the same severity.
 
 ---
 
-### 6. Sample data and real data serve different purposes
+### 9. Explainable risk scoring is better than an unexplained label
 
-Sample logs were useful for:
+Severity labels alone do not show why an incident was prioritised.
 
-- predictable testing
-- validating specific scenarios
-- checking output formatting
-- reproducing results
+The engine added an explainable numeric score based on:
 
-Real logs were useful for:
+- failed authentication attempts
+- successful login after failures
+- active IOC match
+- cross-source activity
+- post-authentication command execution
 
-- testing parser reliability
-- identifying unexpected log formats
-- validating behaviour against genuine system activity
-- exposing performance and noise issues
+Example:
 
-Both forms of testing were necessary.
+```json
+{
+  "score": 100,
+  "level": "CRITICAL",
+  "factors": [
+    "3 failed authentication attempts: +30",
+    "Successful login after failures: +30",
+    "Active IOC match: +25",
+    "Activity observed across 2 sources: +15",
+    "Post-authentication command activity: +10"
+  ]
+}
+```
 
----
-
-### 7. Automatic blocking introduces operational risk
-
-Blocking a suspicious IP using `iptables` can reduce exposure, but automated response must be carefully controlled.
-
-Potential risks include:
-
-- blocking an administrator
-- blocking a shared IP address
-- disrupting legitimate services
-- locking out the analyst from the lab
-- responding to a false positive
-
-Future automated response should include:
-
-- allowlisting
-- confidence thresholds
-- approval options
-- rollback capability
-- detailed audit logging
+This makes the decision easier to defend in an investigation or interview.
 
 ---
 
-### 8. Historical log data can distort counts
+### 10. Malformed data should be isolated, not allowed to crash the engine
 
-The current engine processes all matching events in the selected file.
+Real telemetry is rarely clean.
 
-Because `real-auth.log` contains older activity, the failed and successful login totals may include events from different testing periods.
+The engine encountered:
 
-A production-quality version should use:
+- malformed Ubuntu timestamps
+- missing timestamps
+- malformed Cowrie JSON
+- unsupported Cowrie event types
+- missing source IP values
+- invalid IOC schema
+- expired and inactive IOC records
 
-- a defined time window
-- event timestamps
-- session correlation
-- state tracking
-- incremental log processing
+These are isolated or rejected safely while valid events continue through the pipeline.
 
 ---
 
-### 9. Documentation is part of the project
+### 11. Persistent deduplication is essential for reducing alert fatigue
 
-The project originally focused mainly on code and terminal output.
+Without state, the same incident can be generated every time the engine runs.
 
-Reconstructing the work later showed the importance of maintaining:
+The engine now creates stable incident fingerprints and stores deduplication state.
 
-- architecture notes
-- setup instructions
-- testing evidence
-- lessons learned
-- screenshots
-- Git history
-- a clear roadmap
+This allows it to suppress repeated incidents inside a cooldown period and generate new alerts after the cooldown expires.
 
-Good documentation makes the project easier to maintain, explain and present in interviews.
+Detection quality includes noise reduction, not only detection coverage.
+
+---
+
+### 12. Evidence preservation matters
+
+The engine displays only recent evidence entries in terminal output to maintain readability, while raw evidence remains available in structured outputs.
+
+This creates a balance between concise analyst review and full investigation context.
+
+---
+
+### 13. Sample data and real data serve different purposes
+
+Sample data was useful for deterministic testing, reproducing scenarios, validating boundaries, and proving cross-source correlation.
+
+Real logs were useful for exposing unexpected formats, parser assumptions, and operational noise.
+
+Both were necessary, but automated tests should rely on controlled and repeatable data.
+
+---
+
+### 14. Tests made safe refactoring possible
+
+The project now has 57 automated tests.
+
+Coverage includes:
+
+- timestamp parsing
+- Ubuntu normalisation
+- Cowrie normalisation
+- event grouping
+- five-minute correlation
+- cross-source correlation
+- IOC lifecycle validation
+- enrichment
+- risk scoring
+- deduplication
+- CSV and JSON output
+
+The test suite became both a development safety net and a portfolio proof point.
+
+---
+
+### 15. Documentation is part of engineering
+
+Updating the README, architecture, and testing documents showed that technical work is easier to explain when decisions are recorded.
+
+Useful documentation includes architecture, setup instructions, testing evidence, lessons learned, screenshots, Git history, limitations, and roadmap.
 
 ---
 
 ## Troubleshooting Lessons
 
-### Git repository initialisation
+### Indentation errors can block the entire test suite
 
-The command:
+A misplaced indentation inside `build_incident_record` caused an `IndentationError` and prevented the test module from importing.
 
-```bash
-git add README.md
+The fix required inspecting exact line numbers and aligning the new block with the surrounding function scope.
 
-initially failed because the directory was not yet a Git repository.
+### Function placement matters
 
-The issue was fixed using:
+The call to `calculate_risk_score()` was accidentally placed inside `calculate_risk_score()` itself.
 
-git init
-git add .
-git commit -m "Initial commit - IOC Detection Engine"
-Git author identity
+This caused infinite recursion and a `RecursionError`.
 
-The first commit used the automatically generated Ubuntu VM identity.
+The correct design was to define the scoring function separately and call it from `build_incident_record`.
 
-The correct Git identity was then configured:
+### Shell commands and Python code are different execution contexts
 
-git config --global user.name "Kaartheeswaran Ravichandran"
-git config --global user.email "kaartheeravi@gmail.com"
+Python assignments entered directly into the shell caused command errors.
 
-The commit author was corrected using:
+This reinforced the difference between shell commands, Python statements, configuration values, and file content.
 
-git commit --amend --reset-author
-Shell command versus Python variable
+### Real authentication logs require careful permission handling
 
-The following line was accidentally entered directly into the shell:
+Instead of running the whole engine as root, the restricted authentication log was copied into the project and ownership was adjusted for lab analysis.
 
-LOG_FILE = "logs/real-auth.log"
+### Generated files should not be committed accidentally
 
-The shell returned:
+Running the engine modifies generated alert and state files.
 
-LOG_FILE: command not found
+The workflow therefore included checking `git status`, staging only intended source files, restoring generated outputs, and reviewing `.gitignore`.
 
-This happened because the line was Python code and needed to be placed inside:
+---
 
-src/main.py
+## Security Lessons
 
-This reinforced the difference between:
+### Detection does not equal confirmation
 
-shell commands
-Python statements
-configuration values
-Permission handling for auth.log
+An alert indicates suspicious activity, not guaranteed compromise. Analyst validation is still required.
 
-The system authentication log is restricted.
+### Severity should be evidence-based
 
-To use it safely in the project, it was copied and ownership was changed:
+Severity should consider event volume, successful authentication, IOC confidence, cross-source confirmation, targeted username, post-login activity, asset importance, and whether the source is trusted.
 
-sudo cp /var/log/auth.log logs/real-auth.log
-sudo chown ubuntu:ubuntu logs/real-auth.log
+### Response should be proportional
 
-This allowed the detection engine to read the copied file without running the entire Python program as root.
+Potential actions include monitoring, further investigation, searching other systems for the IOC, password reset, account disablement, session termination, IP blocking, and forensic review.
 
-Security Lessons
-Detection does not equal confirmation
+### Automatic response creates operational risk
 
-An alert indicates suspicious activity, not guaranteed compromise.
+Automated blocking can cause administrator lockout, false-positive impact, or disruption of legitimate traffic.
 
-Analyst validation is still required.
+Future response capability should include allowlisting, confidence thresholds, approval options, rollback capability, and audit logging.
 
-Severity should be evidence-based
+---
 
-Severity should consider:
+## CTI and SOC Lessons
 
-number of attempts
-successful authentication
-IOC confidence
-user targeted
-timing
-post-login activity
-whether the source is trusted
-Response should be proportional
+### Threat intelligence should support a decision
 
-Possible actions range from:
+IOC enrichment is most useful when it changes how an incident is prioritised or investigated.
 
-monitoring
-rate limiting
-password reset
-account disablement
-IP blocking
-forensic review
+Useful CTI should help answer:
 
-The action should match the confidence and impact of the alert.
+- why does this matter?
+- what should the analyst investigate?
+- what evidence supports the assessment?
+- what detection opportunity exists?
+- what action is appropriate?
 
-Future Improvements Identified
-Add time-window-based correlation
-Add trusted-IP allowlisting
-Add continuous log monitoring
-Add deduplication across repeated runs
-Add external IOC enrichment
-Add MISP integration
-Add STIX output
-Add structured JSON alerts
-Add unit tests
-Add configuration files
-Add command-line arguments
-Add dashboard visualisation
-Add alert lifecycle tracking
-Add safe automated response controls
-Interview Summary
+The current engine supports this partially through correlation, evidence preservation, ATT&CK mapping, and explainable risk scoring.
 
-The most important lesson from this project was that useful security detection requires more than matching a single indicator.
+A future actionable-intelligence layer should add:
 
-The project evolved from simple IOC matching into behaviour-based correlation that considers failed attempts, successful logins, severity, MITRE ATT&CK mapping, evidence and response recommendations.
+- `why_it_matters`
+- investigation steps
+- recommended actions
+- detection opportunities
+- organisational relevance
 
-It also demonstrated the importance of reducing alert noise, validating against real logs and carefully controlling automated response actions.
+### Generic recommendations are not enough
+
+Guidance should be based on actual incident evidence.
+
+| Signal | Analyst implication |
+|---|---|
+| One failed login | Monitor for repetition |
+| Repeated failures | Review targeted accounts and source history |
+| IOC match | Search the environment for the indicator |
+| Success after failures | Investigate possible credential compromise |
+| Cross-source activity | Increase confidence and priority |
+| Command execution | Review post-authentication behaviour |
+| Privileged account | Increase organisational impact |
+| Critical asset | Escalate investigation priority |
+
+---
+
+## Design Trade-Offs
+
+### Batch processing versus real-time ingestion
+
+Batch processing made the project easier to test and reproduce, but it does not provide immediate detection.
+
+### Rule-based scoring versus adaptive scoring
+
+Rule-based scoring is transparent, testable, and explainable, but the weights may not fit every environment.
+
+### Source IP correlation versus broader entity correlation
+
+Source IP is useful for SSH scenarios, but future correlation may also include username, session ID, destination host, asset identity, and command behaviour.
+
+### Local IOC feed versus integrated intelligence platforms
+
+The local JSON feed is deterministic and testable, but lacks automatic enrichment and sharing.
+
+Future phases may include STIX 2.1, TAXII, MISP, OpenCTI, and external reputation sources.
+
+---
+
+## Future Improvements Identified
+
+### Version 1.0 Completion
+
+- final setup-guide update
+- `.gitignore` review
+- repository cleanup
+- screenshots
+- final regression test
+- release tag
+
+### Version 1.1 Actionable Intelligence
+
+- incident priority
+- `why_it_matters`
+- investigation guidance
+- recommended actions
+- detection opportunities
+- evidence-driven guidance tests
+
+### Version 2.0 Organisational Context and Integrations
+
+- high-value account context
+- critical asset context
+- trusted networks
+- environment-specific risk
+- STIX and TAXII support
+- MISP integration
+- OpenCTI integration
+- external enrichment
+- alert lifecycle
+- dashboard visualisation
+- controlled response playbooks
+
+---
+
+## Interview Summary
+
+The project evolved from basic SSH and IOC matching into a multi-source detection pipeline that:
+
+- normalises Ubuntu and Cowrie telemetry
+- correlates activity into five-minute windows
+- creates cross-source incidents
+- validates IOC lifecycle state
+- enriches incidents with threat context
+- maps behaviour to MITRE ATT&CK
+- suppresses duplicates
+- calculates explainable risk
+- preserves investigation evidence
+- produces structured CSV and JSON outputs
+- is validated by 57 automated tests
+
+The next step beyond detection is actionable intelligence: helping an analyst understand why an incident matters, what to investigate, and what decision to make.
