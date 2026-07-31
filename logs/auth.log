@@ -1,6 +1,0 @@
-Apr 28 10:35:11 ubuntu sshd[1234]: Failed password for root from 192.168.56.101 port 44322 ssh2
-Apr 28 10:35:20 ubuntu sshd[1235]: Failed password for admin from 192.168.56.101 port 44323 ssh2
-Apr 28 10:35:31 ubuntu sshd[1236]: Failed password for test from 192.168.56.101 port 44324 ssh2
-Apr 28 10:36:45 ubuntu sshd[1237]: Accepted password for user from 10.0.2.20 port 53421 ssh2
-Apr 28 10:37:02 ubuntu sshd[1238]: Failed password for admin from 45.141.215.90 port 2222 ssh2
-Apr 28 10:38:10 ubuntu sshd[1239]: Failed password for test from 172.16.0.5 port 3333 ssh2

@@ -3,6 +3,8 @@ logs/real-auth.log
 
 # Generated alert output
 alerts/alerts.csv
+alerts/incidents.json
+alerts/dedup-state.json
 
 # Python cache
 __pycache__/
@@ -30,3 +32,7 @@ logs/v2-test-auth.log
 
 # Local source backups
 src/*_backup.py
+
+# Local authentication logs
+logs/auth.log
+logs/real-auth.log
