@@ -2,7 +2,18 @@
 
 ## Purpose
 
-This guide explains how to set up and run the IOC Detection Engine in a local Ubuntu environment.
+This guide explains how to set up, run, test, and validate the IOC Detection Engine in a local Linux environment.
+
+The engine currently supports:
+
+- Ubuntu SSH authentication logs
+- Cowrie honeypot JSONL events
+- local lifecycle-aware IOC intelligence
+- five-minute event correlation
+- cross-source incidents
+- explainable risk scoring
+- CSV and JSON outputs
+- persistent incident deduplication
 
 ---
 
@@ -10,273 +21,571 @@ This guide explains how to set up and run the IOC Detection Engine in a local Ub
 
 Required:
 
-- Ubuntu Linux
-- Python 3
+- Python 3.10 or later
 - Git
-- Basic terminal access
+- Linux environment recommended
+- basic terminal access
+
+No external Python packages are required.
 
 Check Python:
 
 ```bash
 python3 --version
+```
 
 Check Git:
 
+```bash
 git --version
-Project Location
+```
 
-Current project path:
+Expected Python version:
 
-/home/ubuntu/ioc-detection-engine
+```text
+Python 3.10.x or later
+```
 
-Move into the project:
+---
 
-cd ~/ioc-detection-engine
+## Clone the Repository
 
-Confirm:
+```bash
+git clone <repository-url>
+cd ioc-detection-engine
+```
 
+Confirm the current location:
+
+```bash
 pwd
+```
 
-Expected output:
+Example:
 
+```text
 /home/ubuntu/ioc-detection-engine
-Repository Structure
+```
+
+---
+
+## Project Structure
+
+```text
 ioc-detection-engine/
 ├── alerts/
-│   ├── alerts.csv
-│   └── sample-alerts.csv
 ├── data/
 │   └── iocs.json
 ├── docs/
 │   ├── architecture.md
 │   ├── lessons-learned.md
 │   ├── setup-guide.md
-│   ├── testing.md
-│   └── screenshots/
+│   └── testing.md
 ├── logs/
-│   ├── auth.log
-│   ├── real-auth.log
-│   └── sample-auth.log
+│   ├── sample-auth.log
+│   ├── sample-cowrie.jsonl
+│   └── v2-test-auth.log
 ├── notes/
-│   ├── misp-notes.md
-│   ├── mitre-notes.md
-│   └── stix-taxii-notes.md
 ├── src/
-│   └── main.py
+│   ├── main.py
+│   └── normalization.py
+├── tests/
+│   ├── test_main.py
+│   └── test_normalization.py
 ├── .gitignore
 ├── PROJECT_MASTER.md
 └── README.md
-Configure the IOC Feed
+```
 
-Open:
+Some local backup files, generated alert files, and private logs may also exist but are not required to run the sample workflow.
 
-nano data/iocs.json
+---
 
-The file should contain suspicious or malicious IP addresses in valid JSON format.
+## Input Files
 
-Example:
+### Ubuntu Authentication Log
 
-{
-  "malicious_ips": [
-    "192.168.56.101",
-    "45.141.215.90",
-    "192.168.20.18"
-  ]
-}
+Default sample source:
 
-Save using:
-
-Ctrl + O
-Enter
-Ctrl + X
-Configure the Log Source
-
-The engine can use either sample logs or a copied real authentication log.
-
-Sample Log
-
-Recommended for predictable testing:
-
+```text
 logs/sample-auth.log
-Real Ubuntu Log
+```
 
-System source:
+The file contains controlled SSH authentication activity such as:
 
-/var/log/auth.log
+- failed password attempts
+- invalid-user attempts
+- successful logins
+- malformed timestamps for error-handling tests
+- one Ubuntu event aligned with Cowrie for cross-source correlation
 
-Copy it into the project:
+### Cowrie Honeypot Events
 
-sudo cp /var/log/auth.log logs/real-auth.log
-sudo chown ubuntu:ubuntu logs/real-auth.log
+Default sample source:
 
-Do not commit the real log to a public repository because it may contain:
+```text
+logs/sample-cowrie.jsonl
+```
 
-usernames
-IP addresses
-timestamps
-authentication records
-system details
-Select the Log File
+The file contains supported Cowrie events such as:
 
-Open the Python source:
+- `cowrie.login.failed`
+- `cowrie.login.success`
+- `cowrie.command.input`
+- `cowrie.session.closed`
 
-nano src/main.py
+### IOC Feed
 
-Find the log file configuration.
+Default source:
 
-Example for sample testing:
+```text
+data/iocs.json
+```
 
-LOG_FILE = "logs/sample-auth.log"
+The IOC file stores lifecycle-aware indicators with fields such as:
 
-Example for real-log testing:
+- value
+- type
+- source
+- confidence
+- source reliability
+- tags
+- first seen
+- last seen
+- expiry
+- active status
 
-LOG_FILE = "logs/real-auth.log"
+Validate the file before running:
 
-Save the file before running.
+```bash
+python3 -m json.tool data/iocs.json
+```
 
-Run the Detection Engine
+---
+
+## Run the Engine
 
 From the project root:
 
-python3 src/main.py
+```bash
+python3 -m src.main
+```
 
-Expected startup output:
+Expected startup summary:
 
-========== IOC Detection Engine ==========
+```text
+========== IOC Detection Engine v2 ==========
 
-The engine should then:
+Ubuntu log source: logs/sample-auth.log
+Cowrie log source: logs/sample-cowrie.jsonl
+Normalized events: 24
+IOC source: data/iocs.json
+Observed IPs: 7
+```
 
-Load the IOC feed
-Read the selected authentication log
-Extract source IP addresses
-Count failed and successful logins
-Match observed IPs against the IOC feed
-Classify suspicious behaviour
-Display alerts
-Write results to CSV
-Review Alert Output
+Expected completion summary:
 
-Terminal alerts appear during execution.
+```text
+Detection completed
+Alerts generated: 11
+CSV output: alerts/alerts.csv
+JSON output: alerts/incidents.json
+Duplicates suppressed: 0
+```
 
-CSV output:
+Alert totals may change if sample data or detection logic is modified.
 
+---
+
+## Generated Outputs
+
+### Terminal Alerts
+
+The terminal output includes:
+
+- source IP
+- IOC match status
+- IOC source and confidence
+- failed and successful login counts
+- severity
+- classification
+- MITRE ATT&CK mapping
+- supporting evidence
+
+### CSV Alerts
+
+Output:
+
+```text
 alerts/alerts.csv
+```
 
-View it using:
+View it with:
 
+```bash
 cat alerts/alerts.csv
+```
 
-For easier reading:
+For wider output:
 
+```bash
 column -s, -t < alerts/alerts.csv | less -S
+```
 
-Exit less by pressing:
+Press `q` to exit.
 
-q
-Test with Sample Data
+### JSON Incidents
+
+Output:
+
+```text
+alerts/incidents.json
+```
+
+Pretty-print it:
+
+```bash
+python3 -m json.tool alerts/incidents.json
+```
+
+Inspect the live cross-source incident:
+
+```bash
+python3 -m json.tool alerts/incidents.json | grep -A30 '"cross_source": true'
+```
+
+Expected fields include:
+
+```json
+{
+  "sources": [
+    "cowrie",
+    "ubuntu_auth"
+  ],
+  "cross_source": true,
+  "risk": {
+    "score": 100,
+    "level": "CRITICAL"
+  }
+}
+```
+
+### Deduplication State
+
+Output:
+
+```text
+alerts/dedup-state.json
+```
+
+This file stores incident fingerprints used to suppress repeated alerts across runs.
+
+---
+
+## Reset Deduplication for Testing
+
+To force the engine to regenerate all sample incidents:
+
+```bash
+rm -f alerts/dedup-state.json
+python3 -m src.main
+```
+
+Use this only for controlled testing.
+
+In normal operation, keep the deduplication state so repeated incidents can be suppressed correctly.
+
+---
+
+## Run the Test Suite
+
+Run all tests:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Current expected result:
+
+```text
+Ran 57 tests
+OK
+```
+
+The suite covers:
+
+- Ubuntu timestamp parsing
+- Ubuntu SSH normalisation
+- Cowrie JSONL parsing
+- Cowrie event normalisation
+- malformed-data handling
+- grouping by source IP
+- five-minute correlation
+- out-of-order event handling
+- cross-source correlation
+- authentication event counting
+- behavioural classification
+- IOC lifecycle validation
+- IOC enrichment
+- incident JSON generation
+- explainable risk scoring
+- deduplication
+- CSV output
+
+---
+
+## Compile Checks
+
+Before running the full suite, individual files can be checked for syntax errors:
+
+```bash
+python3 -m py_compile src/main.py
+python3 -m py_compile src/normalization.py
+python3 -m py_compile tests/test_main.py
+python3 -m py_compile tests/test_normalization.py
+```
+
+No output means the compile check passed.
+
+---
+
+## Using a Real Ubuntu Authentication Log
+
+System source:
+
+```text
+/var/log/auth.log
+```
+
+Copy it into the project:
+
+```bash
+sudo cp /var/log/auth.log logs/real-auth.log
+sudo chown "$USER":"$USER" logs/real-auth.log
+```
+
+Do not commit real authentication logs to a public repository.
+
+They may contain:
+
+- usernames
+- internal and external IP addresses
+- timestamps
+- authentication records
+- host details
+- operational activity
+
+The current engine is configured for the sample sources. If you switch to a real source, update the relevant log-path constant in `src/main.py`, run tests afterward, and avoid committing the local path change unless it is intentional.
+
+---
+
+## Common Issues
+
+### `IndentationError`
+
+Example:
+
+```text
+IndentationError: unexpected indent
+```
+
+Inspect the relevant lines:
+
+```bash
+nl -ba src/main.py | sed -n 'START,ENDp'
+```
+
+Open at the failing line:
+
+```bash
+nano +LINE_NUMBER src/main.py
+```
+
+Align the block with the surrounding function scope, then run:
+
+```bash
+python3 -m py_compile src/main.py
+```
+
+### `RecursionError`
+
+A function may be calling itself unintentionally.
+
+Inspect the referenced line and confirm helper functions are called from the correct parent function rather than from inside themselves.
+
+### Test module import failure
 
 Run:
 
-python3 src/main.py
+```bash
+python3 -m py_compile src/main.py
+python3 -m py_compile tests/test_main.py
+```
 
-A successful sample test should detect:
+Fix the first syntax or indentation error before rerunning the full suite.
 
-repeated failed logins
-an IOC match
-failed logins followed by a successful login
-severity classification
-MITRE ATT&CK mappings
-
-Expected classifications may include:
-
-Login Failures
-IOC Match - SSH Brute Force
-Brute Force → Successful Login
-Git Configuration
-
-Configure the Git author:
-
-git config --global user.name "Kaartheeswaran Ravichandran"
-git config --global user.email "kaartheeravi@gmail.com"
-
-Check:
-
-git config --global user.name
-git config --global user.email
-Save Changes with Git
-
-Check changed files:
-
-git status
-
-Stage changes:
-
-git add .
-
-Commit:
-
-git commit -m "Add project documentation"
-
-Review commit history:
-
-git log --oneline
-Security Precautions
-Use the project only in an authorised lab environment
-Do not expose the Ubuntu SSH service directly to the public internet
-Do not publish genuine authentication logs
-Do not commit credentials or API keys
-Do not automatically block trusted IP addresses
-Keep a recovery method available before testing firewall rules
-Validate JSON before running the engine
-Review alerts manually before taking response actions
-Common Issues
-Python file not found
-
-Error:
-
-python3: can't open file
-
-Fix:
-
-cd ~/ioc-detection-engine
-python3 src/main.py
-Log file not found
+### Log file not found
 
 Check available files:
 
+```bash
 ls -l logs/
+```
 
-Confirm that the LOG_FILE value in src/main.py matches the actual filename.
+Confirm the configured path in `src/main.py` matches the actual filename.
 
-Permission denied reading auth.log
+### Invalid IOC JSON
 
-Use a copied version:
+Validate:
 
-sudo cp /var/log/auth.log logs/real-auth.log
-sudo chown ubuntu:ubuntu logs/real-auth.log
-Invalid JSON
-
-Validate the IOC feed:
-
+```bash
 python3 -m json.tool data/iocs.json
+```
 
-A valid file will be printed in formatted JSON.
+### Malformed IOC schema
 
-Git repository not initialised
+The top-level IOC structure must match the schema expected by the engine.
 
-Run:
+If the engine reports:
 
-git init
-git add .
-git commit -m "Initial commit - IOC Detection Engine"
-Current Limitations
-Static local IOC feed
-Stored log-file processing
-No live monitoring
-No time-window correlation
-No automatic MISP integration
-No external enrichment
-No dashboard
-No automated rule generation
+```text
+Error: Invalid IOC file: 'indicators' must be a list
+```
 
-These will be addressed in later phases.
+confirm that the file contains an `indicators` list and that each indicator includes the required fields.
+
+### Permission denied reading `auth.log`
+
+Use a copied lab version:
+
+```bash
+sudo cp /var/log/auth.log logs/real-auth.log
+sudo chown "$USER":"$USER" logs/real-auth.log
+```
+
+Do not run the entire engine as root unless there is a justified lab requirement.
+
+### Duplicate alerts are not appearing
+
+The deduplication state may be suppressing them.
+
+For a controlled rerun:
+
+```bash
+rm -f alerts/dedup-state.json
+python3 -m src.main
+```
+
+### Generated files appear in `git status`
+
+Check:
+
+```bash
+git status
+```
+
+Restore tracked generated outputs when you do not intend to commit them:
+
+```bash
+git restore alerts/alerts.csv alerts/incidents.json alerts/dedup-state.json
+```
+
+Only restore files that are already tracked and that you intentionally want to discard.
+
+---
+
+## Git Workflow
+
+Check changes:
+
+```bash
+git status
+```
+
+Stage only intended files:
+
+```bash
+git add <file1> <file2>
+```
+
+Commit:
+
+```bash
+git commit -m "Describe the change"
+```
+
+Push:
+
+```bash
+git push
+```
+
+Avoid using `git add .` when generated outputs or private logs may be present.
+
+Review the commit:
+
+```bash
+git log --oneline -5
+```
+
+---
+
+## Security and Privacy
+
+Use this project only in an authorised lab or defensive environment.
+
+Do not:
+
+- expose the SSH lab directly to the public internet
+- commit real authentication logs
+- commit passwords, tokens, API keys, or secrets
+- treat an IOC match as confirmed compromise
+- enable automatic blocking without safeguards
+- test against systems without authorisation
+
+Review alerts manually before taking response action.
+
+Any future automated response should include:
+
+- allowlisting
+- confidence thresholds
+- approval controls
+- rollback capability
+- audit logging
+
+---
+
+## Current Limitations
+
+- batch processing rather than continuous ingestion
+- local JSON IOC feed
+- correlation based primarily on source IP and time
+- rule-based risk weights
+- no direct MISP or OpenCTI integration
+- no STIX 2.1 or TAXII support
+- no external enrichment APIs
+- no dashboard
+- no automated containment
+- only Ubuntu SSH and selected Cowrie event types are supported
+
+---
+
+## Validation Checklist
+
+Before considering the local setup complete, confirm:
+
+```text
+[ ] Python 3.10 or later is installed
+[ ] Repository is cloned
+[ ] Sample Ubuntu log exists
+[ ] Sample Cowrie JSONL exists
+[ ] IOC JSON validates
+[ ] Source files compile
+[ ] 57 tests pass
+[ ] Engine runs successfully
+[ ] CSV output is generated
+[ ] JSON output is generated
+[ ] Cross-source incident is present
+[ ] Explainable risk score is present
+[ ] Git working tree contains only intended changes
+```
