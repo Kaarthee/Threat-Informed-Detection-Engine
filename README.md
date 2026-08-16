@@ -497,6 +497,33 @@ Controls include:
 - `docs/lessons-learned.md`
 
 ---
+## Screenshots
+
+### Automated Test Suite
+
+57 automated tests validate parsing, normalisation, correlation, IOC lifecycle handling, deduplication, risk scoring, and output generation.
+
+![Automated test suite](docs/screenshots/01-test-suite.png)
+
+### Cross-Source Detection
+
+Ubuntu SSH and Cowrie honeypot telemetry from the same source IP are correlated into a single five-minute incident window.
+
+![Cross-source alert](docs/screenshots/02-cross-source-alert.png)
+
+### Explainable Risk Scoring
+
+The engine records the exact factors contributing to an incident's risk score, including IOC matches, successful authentication after failures, cross-source activity, and post-authentication commands.
+
+![Explainable risk scoring](docs/screenshots/03-risk-scoring-json.png)
+
+### Multi-Source Detection Pipeline
+
+The engine processes Ubuntu and Cowrie telemetry through the shared detection pipeline.
+
+![Engine summary](docs/screenshots/04-engine-summary.png)
+
+---
 
 ## Author
 
