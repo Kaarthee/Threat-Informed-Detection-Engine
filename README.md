@@ -1,4 +1,4 @@
-# IOC Detection Engine
+# Threat Informed Detection Engine
 
 A Python-based, multi-source security detection engine that analyses Ubuntu SSH authentication logs and Cowrie honeypot events, correlates attacker behaviour, enriches incidents with threat intelligence, and generates explainable security alerts.
 
@@ -10,20 +10,20 @@ The project was developed in an isolated Linux lab to demonstrate practical dete
 
 Security telemetry often arrives in different formats and from different tools. A Linux authentication log and a honeypot JSON event may describe related attacker activity, but they cannot be analysed consistently until they are normalised.
 
-The IOC Detection Engine converts Ubuntu SSH and Cowrie events into a shared security-event model and then:
+The Threat informed Detection Engine converts Ubuntu SSH and Cowrie events into a shared security-event model and then:
 
 1. ingests events from multiple telemetry sources
 2. normalises them into a common schema
 3. groups activity by source IP address
 4. correlates related events within five-minute incident windows
 5. detects suspicious authentication behaviour
-6. matches source IPs against lifecycle-aware IOC intelligence
+6. matches source IPs against lifecycle-aware Threat informed intelligence
 7. calculates an explainable incident risk score
 8. maps activity to MITRE ATT&CK
 9. suppresses repeated incidents using persistent deduplication
 10. generates terminal, CSV, and JSON outputs
 
-The result is a structured incident containing evidence, source context, severity, risk factors, IOC intelligence, ATT&CK techniques, and event counts.
+The result is a structured incident containing evidence, source context, severity, risk factors, Threat informed intelligence, ATT&CK techniques, and event counts.
 
 ---
 
@@ -41,8 +41,8 @@ The result is a structured incident containing evidence, source context, severit
 - SSH brute-force detection
 - Repeated authentication-failure detection
 - Successful login after repeated failures
-- Known malicious IOC detection
-- Lifecycle-aware IOC enrichment
+- Known malicious Threat informed detection
+- Lifecycle-aware Threat informed enrichment
 - Explainable numeric risk scoring
 - Severity and classification assignment
 - MITRE ATT&CK mapping
@@ -75,7 +75,7 @@ The result is a structured incident containing evidence, source context, severit
                 +-------------+-------------+
                 |                           |
                 v                           v
-       Behavioural Detection          IOC Intelligence Match
+       Behavioural Detection          Threat informed Intelligence Match
                 |                           |
                 +-------------+-------------+
                               |
@@ -168,9 +168,9 @@ Example:
 
 Multiple failed logins from the same source IP may indicate password guessing, credential stuffing, or SSH brute-force activity.
 
-### IOC-Matched Activity
+### Threat informed-Matched Activity
 
-Observed source IPs are compared against an active IOC feed. An IOC match increases incident confidence and risk, but is not treated as proof of compromise by itself.
+Observed source IPs are compared against an active Threat informed feed. An Threat informed match increases incident confidence and risk, but is not treated as proof of compromise by itself.
 
 ### Successful Login After Failures
 
@@ -226,7 +226,7 @@ This indicates that the same source IP was observed across multiple telemetry so
 |---|---:|
 | Failed authentication attempts | +10 each, capped at +30 |
 | Successful login after failures | +30 |
-| Active IOC match | +25 |
+| Active Threat informed match | +25 |
 | Activity across multiple sources | +15 |
 | Post-authentication command activity | +10 |
 
@@ -249,7 +249,7 @@ Example:
     "factors": [
       "3 failed authentication attempts: +30",
       "Successful login after failures: +30",
-      "Active IOC match: +25",
+      "Active Threat informed match: +25",
       "Activity observed across 2 sources: +15",
       "Post-authentication command activity: +10"
     ]
@@ -261,9 +261,9 @@ The factors show exactly why an incident received its score.
 
 ---
 
-## IOC Intelligence and Lifecycle Management
+## Threat informed Intelligence and Lifecycle Management
 
-Indicators are stored in `data/iocs.json`.
+Indicators are stored in `data/Threat informeds.json`.
 
 Supported context includes:
 
@@ -336,17 +336,17 @@ The engine produces:
 - structured CSV alerts in `alerts/alerts.csv`
 - detailed JSON incidents in `alerts/incidents.json`
 
-JSON incidents include the incident ID, timestamps, source IP, telemetry sources, cross-source status, risk score, risk factors, IOC context, event counts, severity, classification, ATT&CK techniques, and raw evidence.
+JSON incidents include the incident ID, timestamps, source IP, telemetry sources, cross-source status, risk score, risk factors, Threat informed context, event counts, severity, classification, ATT&CK techniques, and raw evidence.
 
 ---
 
 ## Project Structure
 
 ```text
-ioc-detection-engine/
+Threat informed-detection-engine/
 ├── alerts/
 ├── data/
-│   └── iocs.json
+│   └── Threat informeds.json
 ├── docs/
 ├── logs/
 │   ├── sample-auth.log
@@ -379,7 +379,7 @@ No external Python libraries are required.
 
 ```bash
 git clone <repository-url>
-cd ioc-detection-engine
+cd Threat informed-detection-engine
 python3 -m src.main
 ```
 
@@ -387,7 +387,7 @@ The engine reads:
 
 - `logs/sample-auth.log`
 - `logs/sample-cowrie.jsonl`
-- `data/iocs.json`
+- `data/Threat informeds.json`
 
 Generated output is written to:
 
@@ -411,7 +411,7 @@ Current status:
 57 automated tests passing
 ```
 
-Coverage includes parsing, normalisation, malformed-data handling, grouping, event correlation, cross-source correlation, behavioural classification, IOC lifecycle validation, enrichment, incident generation, risk scoring, deduplication, and CSV output.
+Coverage includes parsing, normalisation, malformed-data handling, grouping, event correlation, cross-source correlation, behavioural classification, Threat informed lifecycle validation, enrichment, incident generation, risk scoring, deduplication, and CSV output.
 
 ---
 
@@ -428,13 +428,13 @@ Controls include:
 - separating detection from automated response
 - documenting false-positive risks
 - preserving raw evidence for investigation
-- validating IOC records before use
+- validating Threat informed records before use
 
 ---
 
 ## Current Limitations
 
-- IOC intelligence is loaded from a local JSON file
+- Threat informed intelligence is loaded from a local JSON file
 - processing is batch-based rather than continuous
 - correlation is based primarily on source IP and time
 - no direct MISP or OpenCTI API integration
@@ -453,7 +453,7 @@ Controls include:
 - TAXII collection support
 - MISP integration
 - OpenCTI integration
-- external IOC enrichment
+- external Threat informed enrichment
 - configurable correlation rules
 - configurable risk weights
 - alert lifecycle and analyst status
@@ -475,7 +475,7 @@ Controls include:
 - multi-source telemetry ingestion
 - behavioural detection
 - event correlation
-- threat intelligence and IOC enrichment
+- threat intelligence and Threat informed enrichment
 - MITRE ATT&CK mapping
 - incident triage
 - explainable risk scoring
@@ -501,7 +501,7 @@ Controls include:
 
 ### Automated Test Suite
 
-57 automated tests validate parsing, normalisation, correlation, IOC lifecycle handling, deduplication, risk scoring, and output generation.
+57 automated tests validate parsing, normalisation, correlation, Threat informed lifecycle handling, deduplication, risk scoring, and output generation.
 
 ![Automated test suite](docs/screenshots/01-test-suite.png)
 
@@ -513,7 +513,7 @@ Ubuntu SSH and Cowrie honeypot telemetry from the same source IP are correlated 
 
 ### Explainable Risk Scoring
 
-The engine records the exact factors contributing to an incident's risk score, including IOC matches, successful authentication after failures, cross-source activity, and post-authentication commands.
+The engine records the exact factors contributing to an incident's risk score, including Threat informed matches, successful authentication after failures, cross-source activity, and post-authentication commands.
 
 ![Explainable risk scoring](docs/screenshots/03-risk-scoring-json.png)
 
