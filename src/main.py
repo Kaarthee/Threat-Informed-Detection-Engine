@@ -53,6 +53,15 @@ except ModuleNotFoundError:
         detect_ssh_authorized_key_persistence,
     )
 
+try:
+    from src.attack import (
+        load_attack_knowledge_base,
+    )
+except ModuleNotFoundError:
+    from attack import (
+        load_attack_knowledge_base,
+    )
+
 # -------- COLORS --------
 RED = "\033[91m"
 GREEN = "\033[92m"
@@ -1711,6 +1720,10 @@ def is_duplicate_incident(
 
 
 def main() -> None:
+    
+    attack_kb = (
+        load_attack_knowledge_base()
+    )
     ioc_records = load_iocs(
         IOC_FILE
     )
@@ -1854,6 +1867,14 @@ def main() -> None:
                     ),
                 )
             )
+
+            if attack_kb is not None:
+                detected_behaviors = [
+                    attack_kb.enrich_behavior(
+                        behavior
+                    )
+                    for behavior in detected_behaviors
+                ]
 
             if not should_alert(
                 failed,

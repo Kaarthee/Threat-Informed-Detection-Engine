@@ -631,7 +631,7 @@ class TestCowrieNormalization(unittest.TestCase):
             1,
         )
 
-    def test_sample_file_normalizes_five_events(self):
+    def test_sample_file_normalizes_all_events(self):
         from pathlib import Path
 
         events = normalize_cowrie_logs(
@@ -640,7 +640,7 @@ class TestCowrieNormalization(unittest.TestCase):
 
         self.assertEqual(
             len(events),
-            5,
+            15,
         )
         self.assertEqual(
             events[0].event_type,
