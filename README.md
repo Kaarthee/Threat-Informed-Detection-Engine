@@ -94,6 +94,35 @@ The result is a structured incident containing evidence, source context, severit
              Terminal        CSV           JSON
 ```
 
+
+## MITRE ATT&CK Integration
+
+The engine integrates the MITRE Enterprise ATT&CK knowledge base using a locally cached STIX dataset.
+
+Behaviour detections are mapped to ATT&CK only where the available telemetry supports the mapping. ATT&CK metadata is used to enrich detections with official technique names, tactics, supported platforms, sub-technique status, and lifecycle metadata.
+
+### Detection Coverage
+
+| Detection | ATT&CK | Technique | Coverage |
+|---|---|---|---|
+| D001 | T1110 | Brute Force | Detected |
+| D002 | T1078 | Valid Accounts | Partial |
+| D003 | T1110.003 | Password Spraying | Partial |
+| D004 | T1110 | Brute Force | Partial |
+| D005 | T1110 | Brute Force | Partial |
+| D006 | T1059 | Command and Scripting Interpreter | Partial |
+| D007 | T1082 | System Information Discovery | Partial |
+| D008 | T1105 | Ingress Tool Transfer | Partial |
+| D009 | T1548 | Abuse Elevation Control Mechanism | Partial |
+| D010 | T1098.004 | SSH Authorized Keys | Detected |
+
+Coverage is intentionally conservative:
+
+- **Detected** means the available telemetry and detection logic provide comparatively direct support for the ATT&CK mapping.
+- **Partial** means the observed behaviour is consistent with the technique, but the current telemetry does not justify claiming complete coverage.
+- **Unsupported** is reserved for techniques where the engine lacks sufficient telemetry or detection logic.
+
+The complete generated coverage matrix is available in [`docs/attack-coverage.md`](docs/attack-coverage.md).
 ---
 
 ## Normalised Security Event Model
