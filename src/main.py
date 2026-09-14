@@ -25,6 +25,34 @@ except ModuleNotFoundError:
         normalized_events_to_raw_logs,
     )
 
+
+try:
+    from src.detections import (
+        detect_repeated_authentication_failures,
+        detect_success_after_failures,
+        detect_multi_account_authentication_probing,
+        detect_privileged_account_targeting,
+        detect_persistent_authentication_probing,
+        detect_post_authentication_command_execution,
+        detect_system_reconnaissance,
+        detect_external_file_download,
+        detect_privilege_escalation_attempt,
+        detect_ssh_authorized_key_persistence,
+    )
+except ModuleNotFoundError:
+    from detections import (
+        detect_repeated_authentication_failures,
+        detect_success_after_failures,
+        detect_multi_account_authentication_probing,
+        detect_privileged_account_targeting,
+        detect_persistent_authentication_probing,
+        detect_post_authentication_command_execution,
+        detect_system_reconnaissance,
+        detect_external_file_download,
+        detect_privilege_escalation_attempt,
+        detect_ssh_authorized_key_persistence,
+    )
+
 # -------- COLORS --------
 RED = "\033[91m"
 GREEN = "\033[92m"
@@ -263,9 +291,116 @@ def classify_activity(
     failed: int,
     successful: int,
     is_ioc_match: bool,
+    detected_behaviors: list[dict] | None = None,
 ) -> tuple[str, str, str, str]:
     """Return severity, classification, MITRE mapping and colour."""
 
+    behaviors = detected_behaviors or []
+
+    technique_ids = sorted(
+        {
+            behavior["attack"]["technique_id"]
+            for behavior in behaviors
+            if (
+                behavior.get("attack")
+                and behavior["attack"].get("technique_id")
+            )
+        }
+    )
+
+    behavior_mitre = (
+        ", ".join(technique_ids)
+        if technique_ids
+        else "N/A"
+    )
+
+    detection_ids = {
+        behavior.get("detection_id")
+        for behavior in behaviors
+    }
+
+    if "D010" in detection_ids:
+        return (
+            "HIGH",
+            "SSH Authorized Key Persistence Attempt",
+            behavior_mitre,
+            RED,
+        )
+
+    if "D009" in detection_ids:
+        return (
+            "HIGH",
+            "Privilege Escalation Attempt",
+            behavior_mitre,
+            RED,
+        )
+
+    if "D008" in detection_ids:
+        return (
+            "HIGH",
+            "External File or Tool Download",
+            behavior_mitre,
+            RED,
+        )
+
+    if "D002" in detection_ids:
+        return (
+            "CRITICAL",
+            "Successful Authentication After Failures",
+            behavior_mitre,
+            YELLOW,
+        )
+
+    if "D006" in detection_ids:
+        return (
+            "HIGH",
+            "Post-Authentication Command Execution",
+            behavior_mitre,
+            RED,
+        )
+
+    if "D005" in detection_ids:
+        return (
+            "HIGH",
+            "Persistent Authentication Probing",
+            behavior_mitre,
+            RED,
+        )
+
+    if "D001" in detection_ids:
+        return (
+            "HIGH",
+            "Repeated Authentication Failures",
+            behavior_mitre,
+            RED,
+        )
+
+    if "D007" in detection_ids:
+        return (
+            "MEDIUM",
+            "System Reconnaissance",
+            behavior_mitre,
+            CYAN,
+        )
+
+    if "D004" in detection_ids:
+        return (
+            "MEDIUM",
+            "Privileged Account Targeting",
+            behavior_mitre,
+            CYAN,
+        )
+
+    if "D003" in detection_ids:
+        return (
+            "MEDIUM",
+            "Multi-Account Authentication Probing",
+            behavior_mitre,
+            CYAN,
+        )
+
+    # Backward-compatible classification for callers/tests
+    # that do not yet supply the behaviour catalogue.
     if failed > 0 and successful > 0:
         return (
             "CRITICAL",
@@ -321,15 +456,19 @@ def classify_activity(
         CYAN,
     )
 
-
 def should_alert(
     failed: int,
     successful: int,
     is_ioc_match: bool,
+    detected_behaviors: list[dict] | None = None,
 ) -> bool:
     """Determine whether activity should generate an alert."""
-    return failed > 0 or is_ioc_match
 
+    return (
+        failed > 0
+        or is_ioc_match
+        or bool(detected_behaviors)
+    )
 
 def write_csv_header(
     alert_file: Path,
@@ -574,18 +713,137 @@ def print_alert(
         f"{RESET}\n"
     )
 
+def sanitize_evidence_log(
+    log: str,
+) -> str:
+    """
+    Redact sensitive credential material from JSON evidence.
+    """
+
+    try:
+        event = json.loads(
+            log
+        )
+    except (
+        json.JSONDecodeError,
+        TypeError,
+    ):
+        return log
+
+    sensitive_fields = {
+        "password",
+        "passwd",
+        "secret",
+        "token",
+    }
+
+    for field in sensitive_fields:
+        if field in event:
+            event[field] = "[REDACTED]"
+
+    message = event.get(
+        "message"
+    )
+
+    if isinstance(message, str):
+        if event.get(
+            "eventid"
+        ) in {
+            "cowrie.login.failed",
+            "cowrie.login.success",
+        }:
+            username = event.get(
+                "username",
+                "unknown",
+            )
+
+            event["message"] = (
+                f"login attempt [{username}/[REDACTED]]"
+            )
+
+    return json.dumps(
+        event,
+        sort_keys=True,
+    )
+
+
+def sanitize_evidence_logs(
+    logs: list[str],
+) -> list[str]:
+    """Redact sensitive values from incident evidence."""
+
+    return [
+        sanitize_evidence_log(
+            log
+        )
+        for log in logs
+    ]
 
 def get_incident_time_range(
     logs: list[str],
 ) -> tuple[str | None, str | None]:
-    """Return earliest and latest valid incident timestamps."""
-    timestamps = [
-        timestamp
-        for log in logs
-        if (
-            timestamp := parse_log_timestamp(log)
-        ) is not None
-    ]
+    """
+    Return earliest and latest valid timestamps from
+    Ubuntu syslog or Cowrie JSON evidence.
+    """
+
+    timestamps: list[datetime.datetime] = []
+
+    for log in logs:
+        ubuntu_timestamp = parse_log_timestamp(
+            log
+        )
+
+        if ubuntu_timestamp is not None:
+            timestamps.append(
+                ubuntu_timestamp
+            )
+            continue
+
+        try:
+            cowrie_event = json.loads(
+                log
+            )
+        except (
+            json.JSONDecodeError,
+            TypeError,
+        ):
+            continue
+
+        timestamp_value = cowrie_event.get(
+            "timestamp"
+        )
+
+        if not isinstance(
+            timestamp_value,
+            str,
+        ):
+            continue
+
+        try:
+            cowrie_timestamp = (
+                datetime.datetime.fromisoformat(
+                    timestamp_value.replace(
+                        "Z",
+                        "+00:00",
+                    )
+                )
+            )
+        except ValueError:
+            continue
+
+        if cowrie_timestamp.tzinfo is not None:
+            cowrie_timestamp = (
+                cowrie_timestamp.astimezone(
+                    datetime.timezone.utc
+                ).replace(
+                    tzinfo=None
+                )
+            )
+
+        timestamps.append(
+            cowrie_timestamp
+        )
 
     if not timestamps:
         return None, None
@@ -613,9 +871,16 @@ def calculate_risk_score(
 
     if failed_points > 0:
         score += failed_points
+        
+        attempt_word = (
+            "attempt"
+            if failed == 1
+            else "attempts"
+        )
+
         factors.append(
-            f"{failed} failed authentication attempts: "
-            f"+{failed_points}"
+            f"{failed} failed authentication "
+            f"{attempt_word}: +{failed_points}"
         )
 
     if failed > 0 and successful > 0:
@@ -914,6 +1179,215 @@ def extract_incident_context(
         "sources": sources,
     }
 
+
+def extract_incident_commands(
+    events,
+) -> list[str]:
+    """Extract Cowrie command input from normalized incident events."""
+
+    commands: list[str] = []
+
+    for event in events:
+        if event.event_type != "command_executed":
+            continue
+
+        try:
+            raw_event = json.loads(
+                event.raw_log
+            )
+        except (
+            json.JSONDecodeError,
+            TypeError,
+        ):
+            continue
+
+        command = raw_event.get("input")
+
+        if (
+            isinstance(command, str)
+            and command.strip()
+        ):
+            commands.append(
+                command.strip()
+            )
+
+    return commands
+
+
+def serialize_detected_behavior(
+    behavior,
+) -> dict:
+    """Convert a DetectedBehavior object into incident JSON."""
+
+    attack = None
+
+    if behavior.attack_technique_id:
+        attack = {
+            "technique_id": (
+                behavior.attack_technique_id
+            ),
+            "mapping_status": (
+                behavior.attack_mapping_status
+            ),
+        }
+
+    return {
+        "detection_id": behavior.detection_id,
+        "name": behavior.name,
+        "behavior": behavior.behavior,
+        "confidence": behavior.confidence,
+        "evidence": behavior.evidence,
+        "attack": attack,
+    }
+
+def parse_event_timestamp(
+    timestamp: str | None,
+) -> datetime.datetime | None:
+    """Parse normalized ISO event timestamps."""
+
+    if not timestamp:
+        return None
+
+    try:
+        parsed = datetime.datetime.fromisoformat(
+            timestamp.replace(
+                "Z",
+                "+00:00",
+            )
+        )
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(
+            datetime.timezone.utc
+        ).replace(
+            tzinfo=None
+        )
+
+    return parsed
+
+
+def calculate_failed_activity_span(
+    incident_windows,
+) -> tuple[int, int, float | None]:
+    """
+    Return failed-window count, total failures and
+    time span covering failed authentication windows.
+    """
+
+    failed_windows = []
+
+    total_failed = 0
+
+    for window in incident_windows:
+        failed, _ = count_normalized_events(
+            window
+        )
+
+        if failed <= 0:
+            continue
+
+        total_failed += failed
+
+        timestamps = [
+            parsed
+            for event in window
+            if (
+                parsed := parse_event_timestamp(
+                    event.timestamp
+                )
+            ) is not None
+        ]
+
+        if timestamps:
+            failed_windows.append(
+                min(timestamps)
+            )
+
+    if len(failed_windows) < 2:
+        return (
+            len(failed_windows),
+            total_failed,
+            None,
+        )
+
+    failed_windows.sort()
+
+    activity_span = (
+        failed_windows[-1]
+        - failed_windows[0]
+    )
+
+    return (
+        len(failed_windows),
+        total_failed,
+        activity_span.total_seconds()
+        / 60,
+    )
+
+def run_behavior_detections(
+    failed: int,
+    successful: int,
+    usernames: list[str],
+    commands: list[str],
+    failed_window_count: int,
+    source_failed_count: int,
+    activity_span_minutes: float | None,
+) -> list[dict]:
+    """Run the complete behaviour detection catalogue."""
+
+    persistent_failed_count = (
+        source_failed_count
+        if failed > 0
+        else 0
+    )
+
+    candidates = [
+        detect_repeated_authentication_failures(
+            failed
+        ),
+        detect_success_after_failures(
+            failed,
+            successful,
+        ),
+        detect_multi_account_authentication_probing(
+            usernames
+        ),
+        detect_privileged_account_targeting(
+            usernames
+        ),
+        detect_persistent_authentication_probing(
+            failed_window_count,
+            persistent_failed_count,
+            activity_span_minutes,
+        ),
+        detect_post_authentication_command_execution(
+            successful,
+            commands,
+        ),
+        detect_system_reconnaissance(
+            commands
+        ),
+        detect_external_file_download(
+            commands
+        ),
+        detect_privilege_escalation_attempt(
+            commands
+        ),
+        detect_ssh_authorized_key_persistence(
+            commands
+        ),
+    ]
+
+    return [
+        serialize_detected_behavior(
+            behavior
+        )
+        for behavior in candidates
+        if behavior is not None
+    ]
+
 def build_incident_record(
     alert_id: int,
     generated_at: str,
@@ -928,6 +1402,7 @@ def build_incident_record(
     ioc_record: dict | None = None,
     sources: list[str] | None = None,
     incident_context: dict | None = None,
+    detected_behaviors: list[dict] | None = None,
 ) -> dict:
     """Build a structured enriched JSON incident record."""
     start_time, end_time = (
@@ -938,10 +1413,15 @@ def build_incident_record(
     )
     incident_context = incident_context or {
         "usernames": [],
+        "source_ports": [],
         "destination_ports": [],
         "event_types": [],
         "sources": unique_sources,
     }
+
+    detected_behaviors = (
+        detected_behaviors or []
+    )
     risk_score, risk_level, risk_factors = (
         calculate_risk_score(
             is_ioc_match=is_ioc_match,
@@ -1020,6 +1500,7 @@ def build_incident_record(
             len(unique_sources) > 1
         ),
         "incident_context": incident_context,
+        "detected_behaviors": detected_behaviors,
         "risk": {
             "score": risk_score,
             "level": risk_level,
@@ -1043,7 +1524,18 @@ def build_incident_record(
         },
         "severity": severity,
         "classification": classification,
-        "mitre_attack": [
+        "mitre_attack": sorted(
+            {
+                behavior["attack"]["technique_id"]
+                for behavior in detected_behaviors
+                if (
+                    behavior.get("attack")
+                    and behavior["attack"].get(
+                        "technique_id"
+                    )
+                )
+            }
+        ) if detected_behaviors else [
             technique.strip()
             for technique in mitre.split(",")
             if (
@@ -1246,7 +1738,7 @@ def main() -> None:
 
     print(
         f"{CYAN}========== "
-        f"IOC Detection Engine v2 "
+        f"Threat-Informed Detection Engine "
         f"=========={RESET}\n"
     )
 
@@ -1304,6 +1796,13 @@ def main() -> None:
             )
         )
 
+        (
+             failed_window_count,
+             source_failed_count,
+             activity_span_minutes,
+         ) = calculate_failed_activity_span(
+             incident_windows
+         )
         for (
             incident_number,
             incident_logs,
@@ -1317,7 +1816,7 @@ def main() -> None:
                 )
             )
 
-            raw_logs = (
+            raw_logs = sanitize_evidence_logs(
                 normalized_events_to_raw_logs(
                     incident_logs
                 )
@@ -1331,10 +1830,36 @@ def main() -> None:
             incident_context = extract_incident_context(
                 incident_logs
             )
+
+            commands = extract_incident_commands(
+                incident_logs
+            )
+
+            detected_behaviors = (
+                run_behavior_detections(
+                    failed=failed,
+                    successful=successful,
+                    usernames=incident_context[
+                        "usernames"
+                    ],
+                    commands=commands,
+                    failed_window_count=(
+                        failed_window_count
+                    ),
+                    source_failed_count=(
+                        source_failed_count
+                    ),
+                    activity_span_minutes=(
+                        activity_span_minutes
+                    ),
+                )
+            )
+
             if not should_alert(
                 failed,
                 successful,
                 is_ioc_match,
+                detected_behaviors,
             ):
                 continue
 
@@ -1347,6 +1872,7 @@ def main() -> None:
                 failed,
                 successful,
                 is_ioc_match,
+                detected_behaviors,
             )
 
             current_time = (
@@ -1374,6 +1900,7 @@ def main() -> None:
                     ioc_record,
                     incident_sources,
                     incident_context,
+                    detected_behaviors,
                 )
             )
 

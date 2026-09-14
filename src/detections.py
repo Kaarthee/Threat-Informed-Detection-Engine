@@ -144,18 +144,26 @@ def detect_privileged_account_targeting(
 def detect_persistent_authentication_probing(
     incident_window_count: int,
     failed_count: int,
+    activity_span_minutes: float | None = None,
     minimum_windows: int = 2,
+    maximum_span_minutes: int = 60,
 ) -> DetectedBehavior | None:
     """
     D005
     Detect repeated authentication probing across multiple
-    correlation windows.
+    correlation windows within a meaningful time period.
     """
 
     if incident_window_count < minimum_windows:
         return None
 
     if failed_count <= 0:
+        return None
+
+    if activity_span_minutes is None:
+        return None
+
+    if activity_span_minutes > maximum_span_minutes:
         return None
 
     return DetectedBehavior(
@@ -166,14 +174,14 @@ def detect_persistent_authentication_probing(
         evidence=[
             (
                 "Authentication failures observed across "
-                f"{incident_window_count} incident windows"
+                f"{incident_window_count} incident windows "
+                f"within {activity_span_minutes:.1f} minutes"
             ),
             f"{failed_count} failed authentication attempts observed",
         ],
         attack_technique_id="T1110",
         attack_mapping_status="contextual",
     )
-
 
 def detect_post_authentication_command_execution(
     successful_count: int,

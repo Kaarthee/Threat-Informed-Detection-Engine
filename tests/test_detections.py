@@ -155,9 +155,13 @@ class TestD005PersistentAuthenticationProbing(unittest.TestCase):
         result = detect_persistent_authentication_probing(
             incident_window_count=3,
             failed_count=12,
+            activity_span_minutes=20,        
         )
 
-        self.assertEqual(result.detection_id, "D005")
+        self.assertEqual(
+            result.detection_id,
+            "D005",
+        )
 
     def test_no_failures_does_not_trigger(self):
         result = detect_persistent_authentication_probing(
