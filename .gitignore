@@ -36,3 +36,4 @@ src/*_backup.py
 # Local authentication logs
 logs/auth.log
 logs/real-auth.log
+data/attack/enterprise-attack.json
