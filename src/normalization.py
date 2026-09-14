@@ -17,6 +17,7 @@ class SecurityEvent:
     destination_port: int | None
     protocol: str
     raw_log: str
+    source_port: int | None = None
 
     def to_dict(self) -> dict:
         """Convert the event into a serializable dictionary."""
@@ -89,11 +90,12 @@ def normalize_ubuntu_auth_log(
                 "username"
             ),
             source="ubuntu_auth",
-            destination_port=int(
-                failed_match.group("port")
-            ),
+            destination_port=22,
             protocol="ssh",
             raw_log=log.strip(),
+            source_port=int(
+                failed_match.group("port")
+            ),
         )
 
     if accepted_match:
@@ -107,11 +109,12 @@ def normalize_ubuntu_auth_log(
                 "username"
             ),
             source="ubuntu_auth",
-            destination_port=int(
-                accepted_match.group("port")
-            ),
+            destination_port=22,
             protocol="ssh",
             raw_log=log.strip(),
+            source_port=int(
+                accepted_match.group("port")
+            ),
         )
 
     return None
@@ -194,6 +197,19 @@ def normalize_cowrie_event(
         except ValueError:
             timestamp = None
 
+    source_port = event_data.get(
+        "src_port"
+    )
+
+    try:
+        source_port = (
+            int(source_port)
+            if source_port is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        source_port = None
+
     destination_port = event_data.get(
         "dst_port"
     )
@@ -224,6 +240,7 @@ def normalize_cowrie_event(
         destination_port=destination_port,
         protocol="ssh",
         raw_log=raw_log,
+        source_port=source_port,
     )
 
 

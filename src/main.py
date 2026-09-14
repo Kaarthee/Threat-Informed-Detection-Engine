@@ -664,6 +664,256 @@ def calculate_risk_score(
 
     return score, level, factors
 
+def generate_actionable_intelligence(
+    is_ioc_match: bool,
+    failed: int,
+    successful: int,
+    sources: list[str] | None,
+    logs: list[str],
+) -> dict:
+    """Generate evidence-driven analyst priority and context."""
+
+    unique_sources = sorted(
+        set(sources or [])
+    )
+
+    cross_source = len(unique_sources) > 1
+
+    success_after_failures = (
+        failed > 0
+        and successful > 0
+    )
+
+    command_activity = any(
+        "cowrie.command.input" in log
+        for log in logs
+    )
+
+    if (
+        success_after_failures
+        and (
+            is_ioc_match
+            or cross_source
+            or command_activity
+        )
+    ):
+        priority = "IMMEDIATE"
+
+    elif (
+        success_after_failures
+        or (
+            is_ioc_match
+            and failed >= 2
+        )
+        or (
+            cross_source
+            and failed > 0
+        )
+    ):
+        priority = "HIGH"
+
+    elif (
+        failed >= 2
+        or is_ioc_match
+    ):
+        priority = "ROUTINE"
+
+    else:
+        priority = "LOW"
+
+    reasons: list[str] = []
+    investigation_steps: list[str] = []
+    recommended_actions: list[str] = []
+    detection_opportunities: list[str] = []
+
+    if failed == 1:
+        reasons.append(
+            "1 failed authentication attempt "
+            "was observed"
+        )
+    elif failed > 1:
+        reasons.append(
+            f"{failed} failed authentication "
+            "attempts were observed"
+        )
+
+    if success_after_failures:
+        reasons.append(
+            "a successful login followed "
+            "earlier authentication failures"
+        )
+
+    if is_ioc_match:
+        reasons.append(
+            "the source matched active "
+            "threat intelligence"
+        )
+
+    if cross_source:
+        reasons.append(
+            "activity was confirmed across "
+            "multiple telemetry sources"
+        )
+
+    if command_activity:
+        reasons.append(
+            "post-authentication command "
+            "activity was observed"
+        )
+
+    if failed > 0:
+        investigation_steps.append(
+            "Review authentication logs for the "
+            "source IP and targeted usernames."
+        )
+
+    if failed >= 2:
+        investigation_steps.append(
+            "Check whether the failed attempts "
+            "targeted multiple accounts or "
+            "occurred repeatedly over time."
+        )
+
+        detection_opportunities.append(
+            "Create or tune a detection for "
+            "repeated SSH authentication failures "
+            "from the same source."
+        )
+
+    if success_after_failures:
+        investigation_steps.append(
+            "Validate the successful login and "
+            "determine whether the authenticated "
+            "account activity was legitimate."
+        )
+
+        recommended_actions.append(
+            "Review the affected account for "
+            "possible credential compromise."
+        )
+
+        detection_opportunities.append(
+            "Detect successful authentication "
+            "following repeated failures within "
+            "a short time window."
+        )
+
+    if is_ioc_match:
+        investigation_steps.append(
+            "Search the environment for additional "
+            "activity associated with the matched IOC."
+        )
+
+        recommended_actions.append(
+            "Consider blocking or restricting the "
+            "IOC after validating business impact."
+        )
+
+        detection_opportunities.append(
+            "Hunt for the matched IOC across "
+            "available security telemetry."
+        )
+
+    if cross_source:
+        investigation_steps.append(
+            "Compare evidence across all telemetry "
+            "sources to confirm the incident scope."
+        )
+
+        detection_opportunities.append(
+            "Correlate matching source activity "
+            "across independent log sources."
+        )
+
+    if command_activity:
+        investigation_steps.append(
+            "Review post-authentication commands "
+            "for reconnaissance, persistence, "
+            "privilege escalation, or execution."
+        )
+
+        recommended_actions.append(
+            "Escalate for deeper host investigation "
+            "if suspicious command execution is confirmed."
+        )
+
+        detection_opportunities.append(
+            "Detect suspicious command execution "
+            "following successful remote authentication."
+        )
+
+    if reasons:
+        why_it_matters = (
+            "; ".join(reasons) + "."
+        )
+    else:
+        why_it_matters = (
+            "Limited suspicious activity "
+            "was observed."
+        )
+
+    return {
+        "priority": priority,
+        "why_it_matters": why_it_matters,
+        "investigation_steps": investigation_steps,
+        "recommended_actions": recommended_actions,
+        "detection_opportunities": detection_opportunities,
+    }
+
+
+def extract_incident_context(
+    events,
+) -> dict:
+    """Extract analyst-relevant context from normalized events."""
+
+    usernames = sorted(
+        {
+            event.username
+            for event in events
+            if event.username
+        }
+    )
+
+    source_ports = sorted(
+        {
+            event.source_port
+            for event in events
+            if event.source_port is not None
+        }
+    )
+
+    destination_ports = sorted(
+        {
+            event.destination_port
+            for event in events
+            if event.destination_port is not None
+        }
+    )
+
+    event_types = sorted(
+        {
+            event.event_type
+            for event in events
+            if event.event_type
+        }
+    )
+
+    sources = sorted(
+        {
+            event.source
+            for event in events
+            if event.source
+        }
+    )
+
+    return {
+        "usernames": usernames,
+        "source_ports": source_ports,
+        "destination_ports": destination_ports,
+        "event_types": event_types,
+        "sources": sources,
+    }
+
 def build_incident_record(
     alert_id: int,
     generated_at: str,
@@ -677,6 +927,7 @@ def build_incident_record(
     logs: list[str],
     ioc_record: dict | None = None,
     sources: list[str] | None = None,
+    incident_context: dict | None = None,
 ) -> dict:
     """Build a structured enriched JSON incident record."""
     start_time, end_time = (
@@ -685,8 +936,23 @@ def build_incident_record(
     unique_sources = sorted(
         set(sources or [])
     )
+    incident_context = incident_context or {
+        "usernames": [],
+        "destination_ports": [],
+        "event_types": [],
+        "sources": unique_sources,
+    }
     risk_score, risk_level, risk_factors = (
         calculate_risk_score(
+            is_ioc_match=is_ioc_match,
+            failed=failed,
+            successful=successful,
+            sources=unique_sources,
+            logs=logs,
+        )
+    )
+    actionable_intelligence = (
+        generate_actionable_intelligence(
             is_ioc_match=is_ioc_match,
             failed=failed,
             successful=successful,
@@ -753,11 +1019,15 @@ def build_incident_record(
         "cross_source": (
             len(unique_sources) > 1
         ),
+        "incident_context": incident_context,
         "risk": {
             "score": risk_score,
             "level": risk_level,
             "factors": risk_factors,
         },
+        "actionable_intelligence": (
+            actionable_intelligence
+        ),
         "ioc": ioc_context,
         "time_window": {
             "start": start_time,
@@ -1058,6 +1328,9 @@ def main() -> None:
                     for event in incident_logs
                 }
             )
+            incident_context = extract_incident_context(
+                incident_logs
+            )
             if not should_alert(
                 failed,
                 successful,
@@ -1100,6 +1373,7 @@ def main() -> None:
                     raw_logs,
                     ioc_record,
                     incident_sources,
+                    incident_context,
                 )
             )
 

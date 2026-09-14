@@ -18,6 +18,7 @@ from src.main import (
     calculate_risk_score,
     parse_log_timestamp,
     write_csv_header,
+    generate_actionable_intelligence,
 )
 
 class TestTimestampParsing(unittest.TestCase):
@@ -758,6 +759,246 @@ class TestExplainableRiskScoring(unittest.TestCase):
         self.assertIn(
             "20 failed authentication attempts: +30",
             factors,
+        )
+
+class TestActionableIntelligence(unittest.TestCase):
+
+    def test_low_priority_single_failure(self):
+        result = generate_actionable_intelligence(
+            is_ioc_match=False,
+            failed=1,
+            successful=0,
+            sources=["ubuntu_auth"],
+            logs=["Failed password"],
+        )
+
+        self.assertEqual(
+            result["priority"],
+            "LOW",
+        )
+
+    def test_routine_priority_repeated_failures(self):
+        result = generate_actionable_intelligence(
+            is_ioc_match=False,
+            failed=2,
+            successful=0,
+            sources=["ubuntu_auth"],
+            logs=[
+                "Failed password",
+                "Failed password",
+            ],
+        )
+
+        self.assertEqual(
+            result["priority"],
+            "ROUTINE",
+        )
+
+        self.assertIn(
+            "2 failed authentication attempts",
+            result["why_it_matters"],
+        )
+
+    def test_high_priority_success_after_failures(self):
+        result = generate_actionable_intelligence(
+            is_ioc_match=False,
+            failed=3,
+            successful=1,
+            sources=["ubuntu_auth"],
+            logs=[],
+        )
+
+        self.assertEqual(
+            result["priority"],
+            "HIGH",
+        )
+
+        self.assertIn(
+            "a successful login followed",
+            result["why_it_matters"],
+        )
+
+    def test_immediate_priority_cross_source_ioc_compromise(
+        self,
+    ):
+        result = generate_actionable_intelligence(
+            is_ioc_match=True,
+            failed=3,
+            successful=1,
+            sources=[
+                "ubuntu_auth",
+                "cowrie",
+            ],
+            logs=[
+                "Failed password",
+                (
+                    '{"eventid": '
+                    '"cowrie.command.input"}'
+                ),
+            ],
+        )
+
+        self.assertEqual(
+            result["priority"],
+            "IMMEDIATE",
+        )
+
+        self.assertIn(
+            "active threat intelligence",
+            result["why_it_matters"],
+        )
+
+        self.assertIn(
+            "multiple telemetry sources",
+            result["why_it_matters"],
+        )
+
+        self.assertIn(
+            "post-authentication command",
+            result["why_it_matters"],
+        )
+
+    def test_single_failure_has_basic_investigation_guidance(self):
+        result = generate_actionable_intelligence(
+            is_ioc_match=False,
+            failed=1,
+            successful=0,
+            sources=["ubuntu_auth"],
+            logs=["Failed password"],
+        )
+
+        self.assertIn(
+            "Review authentication logs for the "
+            "source IP and targeted usernames.",
+            result["investigation_steps"],
+        )
+
+        self.assertEqual(
+            result["recommended_actions"],
+            [],
+        )
+
+        self.assertEqual(
+            result["detection_opportunities"],
+            [],
+        )
+
+    def test_repeated_failures_add_detection_opportunity(self):
+        result = generate_actionable_intelligence(
+            is_ioc_match=False,
+            failed=3,
+            successful=0,
+            sources=["ubuntu_auth"],
+            logs=[
+                "Failed password",
+                "Failed password",
+                "Failed password",
+            ],
+        )
+
+        self.assertIn(
+            "Create or tune a detection for "
+            "repeated SSH authentication failures "
+            "from the same source.",
+            result["detection_opportunities"],
+        )
+
+    def test_ioc_match_adds_hunting_and_blocking_guidance(self):
+        result = generate_actionable_intelligence(
+            is_ioc_match=True,
+            failed=1,
+            successful=0,
+            sources=["ubuntu_auth"],
+            logs=["Failed password"],
+        )
+
+        self.assertIn(
+            "Search the environment for additional "
+            "activity associated with the matched IOC.",
+            result["investigation_steps"],
+        )
+
+        self.assertIn(
+            "Consider blocking or restricting the "
+            "IOC after validating business impact.",
+            result["recommended_actions"],
+        )
+
+        self.assertIn(
+            "Hunt for the matched IOC across "
+            "available security telemetry.",
+            result["detection_opportunities"],
+        )
+
+    def test_success_after_failures_adds_compromise_guidance(self):
+        result = generate_actionable_intelligence(
+            is_ioc_match=False,
+            failed=3,
+            successful=1,
+            sources=["ubuntu_auth"],
+            logs=[],
+        )
+
+        self.assertIn(
+            "Validate the successful login and "
+            "determine whether the authenticated "
+            "account activity was legitimate.",
+            result["investigation_steps"],
+        )
+
+        self.assertIn(
+            "Review the affected account for "
+            "possible credential compromise.",
+            result["recommended_actions"],
+        )
+
+    def test_cross_source_command_activity_adds_deeper_guidance(self):
+        result = generate_actionable_intelligence(
+            is_ioc_match=True,
+            failed=3,
+            successful=1,
+            sources=[
+                "ubuntu_auth",
+                "cowrie",
+            ],
+            logs=[
+                "Failed password",
+                (
+                    '{"eventid": '
+                    '"cowrie.command.input"}'
+                ),
+            ],
+        )
+
+        self.assertIn(
+            "Compare evidence across all telemetry "
+            "sources to confirm the incident scope.",
+            result["investigation_steps"],
+        )
+
+        self.assertIn(
+            "Review post-authentication commands "
+            "for reconnaissance, persistence, "
+            "privilege escalation, or execution.",
+            result["investigation_steps"],
+        )
+
+        self.assertIn(
+            "Escalate for deeper host investigation "
+            "if suspicious command execution is confirmed.",
+            result["recommended_actions"],
+        )
+
+        self.assertIn(
+            "Correlate matching source activity "
+            "across independent log sources.",
+            result["detection_opportunities"],
+        )
+
+        self.assertIn(
+            "Detect suspicious command execution "
+            "following successful remote authentication.",
+            result["detection_opportunities"],
         )
 
 if __name__ == "__main__":

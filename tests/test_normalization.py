@@ -71,8 +71,12 @@ class TestUbuntuAuthNormalization(unittest.TestCase):
             "root",
         )
         self.assertEqual(
-            event.destination_port,
+            event.source_port,
             44322,
+        )
+        self.assertEqual(
+            event.destination_port,
+            22,
         )
         self.assertEqual(
             event.source,
@@ -102,8 +106,12 @@ class TestUbuntuAuthNormalization(unittest.TestCase):
             "user",
         )
         self.assertEqual(
-            event.destination_port,
+            event.source_port,
             53421,
+        )
+        self.assertEqual(
+            event.destination_port,
+            22,
         )
 
     def test_invalid_user_login_is_normalized(self):
@@ -209,6 +217,14 @@ class TestUbuntuAuthNormalization(unittest.TestCase):
         self.assertIn(
             "raw_log",
             event_dict,
+        )
+        self.assertEqual(
+            event_dict["source_port"],
+            44322,
+        )
+        self.assertEqual(
+            event_dict["destination_port"],
+            22,
         )
 
 class TestNormalizedEventProcessing(unittest.TestCase):
@@ -461,6 +477,7 @@ class TestCowrieNormalization(unittest.TestCase):
             "eventid": "cowrie.login.failed",
             "timestamp": "2026-07-17T10:00:00.000000Z",
             "src_ip": "45.141.215.90",
+            "src_port": 50100,
             "dst_port": 22,
             "username": "root",
         }
@@ -483,6 +500,10 @@ class TestCowrieNormalization(unittest.TestCase):
         self.assertEqual(
             event.source,
             "cowrie",
+        )
+        self.assertEqual(
+            event.source_port,
+            50100,
         )
         self.assertEqual(
             event.destination_port,
