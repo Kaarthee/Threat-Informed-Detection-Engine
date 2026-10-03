@@ -37,3 +37,4 @@ src/*_backup.py
 logs/auth.log
 logs/real-auth.log
 data/attack/enterprise-attack.json
+alerts/attack-coverage.json
