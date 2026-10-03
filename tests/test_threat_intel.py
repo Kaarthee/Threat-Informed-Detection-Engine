@@ -2,11 +2,13 @@ import datetime
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from src.threat_intel import (
     LocalJSONIntelProvider,
     STIXIntelProvider,
+    TAXIIIntelProvider,
     ThreatIntelError,
     ThreatIntelIndicator,
     ThreatIntelStore,
@@ -348,6 +350,206 @@ class TestSTIXProvider(unittest.TestCase):
             )
 
 
+
+class TestTAXIIProvider(unittest.TestCase):
+
+    def setUp(self):
+        self.provider = TAXIIIntelProvider(
+            "https://example.test/taxii2/"
+            "collections/test/objects/",
+            source_name="Test TAXII Feed",
+        )
+
+    def test_loads_supported_indicator(self):
+        envelope = {
+            "objects": [
+                {
+                    "type": "indicator",
+                    "id": "indicator--taxii-test",
+                    "pattern_type": "stix",
+                    "pattern": (
+                        "[ipv4-addr:value = "
+                        "'9.9.9.9']"
+                    ),
+                    "confidence": 85,
+                    "valid_from": (
+                        "2026-01-01T00:00:00Z"
+                    ),
+                    "valid_until": (
+                        "2099-01-01T00:00:00Z"
+                    ),
+                    "labels": [
+                        "scanner"
+                    ],
+                }
+            ],
+            "more": False,
+        }
+
+        with mock.patch.object(
+            self.provider,
+            "_fetch_json",
+            return_value=envelope,
+        ):
+            indicators = self.provider.load()
+
+        self.assertEqual(
+            len(indicators),
+            1,
+        )
+
+        self.assertEqual(
+            indicators[0].value,
+            "9.9.9.9",
+        )
+
+        self.assertEqual(
+            indicators[0].source,
+            "Test TAXII Feed",
+        )
+
+        self.assertEqual(
+            indicators[0].stix_id,
+            "indicator--taxii-test",
+        )
+
+        self.assertEqual(
+            indicators[0].provenance[
+                "provider"
+            ],
+            "taxii",
+        )
+
+    def test_unsupported_stix_object_is_skipped(self):
+        envelope = {
+            "objects": [
+                {
+                    "type": "indicator",
+                    "id": "indicator--unsupported",
+                    "pattern": (
+                        "[process:name = "
+                        "'evil.exe']"
+                    ),
+                }
+            ],
+            "more": False,
+        }
+
+        with mock.patch.object(
+            self.provider,
+            "_fetch_json",
+            return_value=envelope,
+        ):
+            indicators = self.provider.load()
+
+        self.assertEqual(
+            indicators,
+            [],
+        )
+
+    def test_invalid_taxii_json_raises_error(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = (
+            b"{invalid-json"
+        )
+
+        with mock.patch(
+            "src.threat_intel."
+            "urllib.request.urlopen",
+            return_value=response,
+        ):
+            with self.assertRaises(
+                ThreatIntelError
+            ):
+                self.provider._fetch_json(
+                    self.provider.collection_objects_url
+                )
+
+    def test_malformed_objects_value_raises_error(self):
+        with mock.patch.object(
+            self.provider,
+            "_fetch_json",
+            return_value={
+                "objects": "not-a-list",
+                "more": False,
+            },
+        ):
+            with self.assertRaises(
+                ThreatIntelError
+            ):
+                self.provider.load()
+
+    def test_pagination_follows_next_token(self):
+        first_page = {
+            "objects": [],
+            "more": True,
+            "next": "token-2",
+        }
+
+        second_page = {
+            "objects": [],
+            "more": False,
+        }
+
+        with mock.patch.object(
+            self.provider,
+            "_fetch_json",
+            side_effect=[
+                first_page,
+                second_page,
+            ],
+        ) as fetch_json:
+            indicators = self.provider.load()
+
+        self.assertEqual(
+            indicators,
+            [],
+        )
+
+        self.assertEqual(
+            fetch_json.call_count,
+            2,
+        )
+
+        second_url = (
+            fetch_json.call_args_list[
+                1
+            ].args[0]
+        )
+
+        self.assertIn(
+            "next=token-2",
+            second_url,
+        )
+
+    def test_basic_auth_header_is_added(self):
+        provider = TAXIIIntelProvider(
+            "https://example.test/taxii2/"
+            "collections/test/objects/",
+            username="user",
+            password="pass",
+        )
+
+        request = provider._build_request(
+            provider.collection_objects_url
+        )
+
+        self.assertEqual(
+            request.get_header(
+                "Authorization"
+            ),
+            "Basic dXNlcjpwYXNz",
+        )
+
+        self.assertEqual(
+            request.get_header(
+                "Accept"
+            ),
+            "application/taxii+json;version=2.1",
+        )
+
+
 class TestThreatIntelStore(unittest.TestCase):
 
     def setUp(self):
@@ -492,4 +694,3 @@ class TestThreatIntelStore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

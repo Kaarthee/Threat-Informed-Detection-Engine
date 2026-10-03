@@ -1,6 +1,9 @@
 import datetime
 import json
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -341,6 +344,115 @@ def parse_stix_indicator_pattern(
     return None
 
 
+
+def stix_object_to_indicator(
+    stix_object: dict,
+    source_name: str,
+    provenance: dict,
+) -> ThreatIntelIndicator | None:
+    """Convert one supported STIX Indicator object."""
+
+    if not isinstance(
+        stix_object,
+        dict,
+    ):
+        return None
+
+    if stix_object.get(
+        "type"
+    ) != "indicator":
+        return None
+
+    pattern = stix_object.get(
+        "pattern"
+    )
+
+    if not isinstance(
+        pattern,
+        str,
+    ):
+        return None
+
+    parsed = (
+        parse_stix_indicator_pattern(
+            pattern
+        )
+    )
+
+    if parsed is None:
+        return None
+
+    indicator_type, value = parsed
+
+    labels = stix_object.get(
+        "labels",
+        [],
+    )
+
+    if not isinstance(
+        labels,
+        list,
+    ):
+        labels = []
+
+    confidence = stix_object.get(
+        "confidence"
+    )
+
+    if not isinstance(
+        confidence,
+        int,
+    ):
+        confidence = None
+
+    revoked = bool(
+        stix_object.get(
+            "revoked",
+            False,
+        )
+    )
+
+    return ThreatIntelIndicator(
+        value=value,
+        type=indicator_type,
+        source=source_name,
+        confidence=confidence,
+        source_reliability=None,
+        first_seen=stix_object.get(
+            "valid_from"
+        ),
+        last_seen=stix_object.get(
+            "modified"
+        ),
+        expires_at=stix_object.get(
+            "valid_until"
+        ),
+        active=not revoked,
+        tags=[
+            str(label)
+            for label in labels
+        ],
+        external_id=None,
+        stix_id=stix_object.get(
+            "id"
+        ),
+        provenance={
+            **provenance,
+            "created_by_ref": (
+                stix_object.get(
+                    "created_by_ref"
+                )
+            ),
+            "pattern": pattern,
+            "pattern_type": (
+                stix_object.get(
+                    "pattern_type"
+                )
+            ),
+        },
+    )
+
+
 class STIXIntelProvider:
     """Load supported indicators from a STIX 2.x bundle."""
 
@@ -389,117 +501,251 @@ class STIXIntelProvider:
         ] = []
 
         for stix_object in objects:
-            if not isinstance(
-                stix_object,
-                dict,
-            ):
-                continue
-
-            if stix_object.get(
-                "type"
-            ) != "indicator":
-                continue
-
-            pattern = stix_object.get(
-                "pattern"
+            indicator = stix_object_to_indicator(
+                stix_object=stix_object,
+                source_name=self.source_name,
+                provenance={
+                    "provider": "stix",
+                    "file": str(
+                        self.stix_file
+                    ),
+                },
             )
 
-            if not isinstance(
-                pattern,
-                str,
-            ):
-                continue
+            if indicator is not None:
+                indicators.append(
+                    indicator
+                )
 
-            parsed = (
-                parse_stix_indicator_pattern(
-                    pattern
+        return indicators
+
+
+
+class TAXIIIntelProvider:
+    """
+    Retrieve STIX objects from a TAXII 2.x collection endpoint.
+
+    The provider expects a URL that returns a TAXII envelope
+    containing an "objects" list of STIX objects.
+    """
+
+    def __init__(
+        self,
+        collection_objects_url: str,
+        source_name: str = "TAXII Feed",
+        username: str | None = None,
+        password: str | None = None,
+        timeout_seconds: int = 10,
+    ):
+        self.collection_objects_url = (
+            collection_objects_url
+        )
+        self.source_name = source_name
+        self.username = username
+        self.password = password
+        self.timeout_seconds = timeout_seconds
+
+    def _build_request(
+        self,
+        url: str,
+    ) -> urllib.request.Request:
+        """Build a TAXII request with STIX/TAXII media types."""
+
+        headers = {
+            "Accept": (
+                "application/taxii+json;version=2.1"
+            ),
+        }
+
+        request = urllib.request.Request(
+            url=url,
+            headers=headers,
+            method="GET",
+        )
+
+        if (
+            self.username is not None
+            and self.password is not None
+        ):
+            credentials = (
+                f"{self.username}:{self.password}"
+            ).encode(
+                "utf-8"
+            )
+
+            import base64
+
+            encoded_credentials = (
+                base64.b64encode(
+                    credentials
+                ).decode(
+                    "ascii"
                 )
             )
 
-            if parsed is None:
-                continue
+            request.add_header(
+                "Authorization",
+                f"Basic {encoded_credentials}",
+            )
 
-            (
-                indicator_type,
-                value,
-            ) = parsed
+        return request
 
-            labels = stix_object.get(
-                "labels",
+    def _fetch_json(
+        self,
+        url: str,
+    ) -> dict:
+        """Fetch and decode a TAXII JSON response."""
+
+        request = self._build_request(
+            url
+        )
+
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=self.timeout_seconds,
+            ) as response:
+                payload = response.read()
+
+        except (
+            urllib.error.HTTPError,
+            urllib.error.URLError,
+            TimeoutError,
+        ) as error:
+            raise ThreatIntelError(
+                "TAXII request failed for "
+                f"{url}: {error}"
+            ) from error
+
+        try:
+            data = json.loads(
+                payload.decode(
+                    "utf-8"
+                )
+            )
+
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as error:
+            raise ThreatIntelError(
+                "Invalid TAXII JSON response "
+                f"from {url}"
+            ) from error
+
+        if not isinstance(
+            data,
+            dict,
+        ):
+            raise ThreatIntelError(
+                "TAXII response must be a JSON object"
+            )
+
+        return data
+
+    def load(self) -> list[ThreatIntelIndicator]:
+        """
+        Fetch supported STIX Indicator objects.
+
+        TAXII pagination is followed when a response includes
+        more=true and a next token.
+        """
+
+        indicators: list[
+            ThreatIntelIndicator
+        ] = []
+
+        next_url = (
+            self.collection_objects_url
+        )
+
+        while next_url:
+            envelope = self._fetch_json(
+                next_url
+            )
+
+            objects = envelope.get(
+                "objects",
                 [],
             )
 
             if not isinstance(
-                labels,
+                objects,
                 list,
             ):
-                labels = []
+                raise ThreatIntelError(
+                    "TAXII response 'objects' must be a list"
+                )
 
-            confidence = stix_object.get(
-                "confidence"
-            )
+            for stix_object in objects:
+                indicator = (
+                    stix_object_to_indicator(
+                        stix_object=stix_object,
+                        source_name=self.source_name,
+                        provenance={
+                            "provider": "taxii",
+                            "url": next_url,
+                        },
+                    )
+                )
 
-            if not isinstance(
-                confidence,
-                int,
-            ):
-                confidence = None
+                if indicator is not None:
+                    indicators.append(
+                        indicator
+                    )
 
-            revoked = bool(
-                stix_object.get(
-                    "revoked",
+            more = bool(
+                envelope.get(
+                    "more",
                     False,
                 )
             )
 
-            valid_from = stix_object.get(
-                "valid_from"
+            next_token = envelope.get(
+                "next"
             )
 
-            valid_until = stix_object.get(
-                "valid_until"
-            )
-
-            indicators.append(
-                ThreatIntelIndicator(
-                    value=value,
-                    type=indicator_type,
-                    source=self.source_name,
-                    confidence=confidence,
-                    source_reliability=None,
-                    first_seen=valid_from,
-                    last_seen=stix_object.get(
-                        "modified"
-                    ),
-                    expires_at=valid_until,
-                    active=not revoked,
-                    tags=[
-                        str(label)
-                        for label in labels
-                    ],
-                    external_id=None,
-                    stix_id=stix_object.get(
-                        "id"
-                    ),
-                    provenance={
-                        "provider": "stix",
-                        "file": str(
-                            self.stix_file
-                        ),
-                        "created_by_ref": (
-                            stix_object.get(
-                                "created_by_ref"
-                            )
-                        ),
-                        "pattern": pattern,
-                        "pattern_type": (
-                            stix_object.get(
-                                "pattern_type"
-                            )
-                        ),
-                    },
+            if (
+                more
+                and isinstance(
+                    next_token,
+                    str,
                 )
-            )
+                and next_token
+            ):
+                parsed_url = (
+                    urllib.parse.urlsplit(
+                        self.collection_objects_url
+                    )
+                )
+
+                query = dict(
+                    urllib.parse.parse_qsl(
+                        parsed_url.query,
+                        keep_blank_values=True,
+                    )
+                )
+
+                query["next"] = (
+                    next_token
+                )
+
+                next_url = (
+                    urllib.parse.urlunsplit(
+                        (
+                            parsed_url.scheme,
+                            parsed_url.netloc,
+                            parsed_url.path,
+                            urllib.parse.urlencode(
+                                query
+                            ),
+                            parsed_url.fragment,
+                        )
+                    )
+                )
+
+            else:
+                next_url = None
 
         return indicators
 
