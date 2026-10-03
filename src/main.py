@@ -62,6 +62,21 @@ except ModuleNotFoundError:
         load_attack_knowledge_base,
     )
 
+try:
+    from src.threat_intel import (
+        LocalJSONIntelProvider,
+        STIXIntelProvider,
+        ThreatIntelError,
+        ThreatIntelStore,
+    )
+except ModuleNotFoundError:
+    from threat_intel import (
+        LocalJSONIntelProvider,
+        STIXIntelProvider,
+        ThreatIntelError,
+        ThreatIntelStore,
+    )
+
 # -------- COLORS --------
 RED = "\033[91m"
 GREEN = "\033[92m"
@@ -71,6 +86,7 @@ RESET = "\033[0m"
 
 # -------- CONFIG --------
 IOC_FILE = Path("data/iocs.json")
+STIX_FILE = Path("data/stix/sample-indicators.json")
 LOG_FILE = Path("logs/sample-auth.log")
 COWRIE_LOG_FILE = Path("logs/sample-cowrie.jsonl")
 ALERT_FILE = Path("alerts/alerts.csv")
@@ -136,6 +152,35 @@ def load_iocs(ioc_file: Path) -> dict[str, dict]:
             f"{error}{RESET}"
         )
         raise SystemExit(1)
+
+
+
+def load_threat_intel_store() -> ThreatIntelStore:
+    """Load configured threat-intelligence providers."""
+
+    store = ThreatIntelStore(
+        providers=[
+            LocalJSONIntelProvider(
+                IOC_FILE
+            ),
+            STIXIntelProvider(
+                STIX_FILE,
+                source_name="Sample STIX Feed",
+            ),
+        ]
+    )
+
+    try:
+        store.load()
+
+    except ThreatIntelError as error:
+        print(
+            f"{RED}Error loading threat intelligence: "
+            f"{error}{RESET}"
+        )
+        raise SystemExit(1)
+
+    return store
 
 
 def read_logs(log_file: Path) -> list[str]:
@@ -1277,6 +1322,32 @@ def parse_event_timestamp(
     return parsed
 
 
+
+def get_incident_reference_time(
+    events,
+) -> datetime.datetime | None:
+    """Return the latest valid normalized event timestamp."""
+
+    timestamps = [
+        parsed
+        for event in events
+        if (
+            parsed := parse_event_timestamp(
+                event.timestamp
+            )
+        ) is not None
+    ]
+
+    if not timestamps:
+        return None
+
+    latest = max(timestamps)
+
+    return latest.replace(
+        tzinfo=datetime.timezone.utc
+    )
+
+
 def calculate_failed_activity_span(
     incident_windows,
 ) -> tuple[int, int, float | None]:
@@ -1461,6 +1532,7 @@ def build_incident_record(
         "expires_at": None,
         "active": False,
         "tags": [],
+        "source_matches": [],
     }
 
     if ioc_record:
@@ -1496,6 +1568,10 @@ def build_incident_record(
             ),
             "tags": ioc_record.get(
                 "tags",
+                [],
+            ),
+            "source_matches": ioc_record.get(
+                "source_matches",
                 [],
             ),
         }
@@ -1720,12 +1796,13 @@ def is_duplicate_incident(
 
 
 def main() -> None:
-    
+
     attack_kb = (
         load_attack_knowledge_base()
     )
-    ioc_records = load_iocs(
-        IOC_FILE
+
+    threat_intel_store = (
+        load_threat_intel_store()
     )
 
     log_lines = read_logs(
@@ -1771,8 +1848,13 @@ def main() -> None:
     )
 
     print(
-        f"IOC source: "
-        f"{IOC_FILE}"
+        f"Threat intel indicators: "
+        f"{len(threat_intel_store.indicators)}"
+    )
+
+    print(
+        f"Threat intel providers: "
+        f"{len(threat_intel_store.providers)}"
     )
 
     print(
@@ -1794,14 +1876,6 @@ def main() -> None:
     suppressed_duplicates = 0
 
     for ip, events in ip_events.items():
-        ioc_record = ioc_records.get(
-            ip
-        )
-
-        is_ioc_match = (
-            ioc_record is not None
-        )
-
         incident_windows = (
             create_normalized_event_windows(
                 events,
@@ -1842,6 +1916,45 @@ def main() -> None:
             )
             incident_context = extract_incident_context(
                 incident_logs
+            )
+
+            incident_reference_time = (
+                get_incident_reference_time(
+                    incident_logs
+                )
+            )
+
+            intel_matches = (
+                threat_intel_store.lookup_ip(
+                    ip,
+                    reference_time=(
+                        incident_reference_time
+                    ),
+                )
+            )
+
+            best_intel_match = (
+                intel_matches[0]
+                if intel_matches
+                else None
+            )
+
+            ioc_record = (
+                best_intel_match.to_dict()
+                if best_intel_match
+                else None
+            )
+
+            if ioc_record is not None:
+                ioc_record[
+                    "source_matches"
+                ] = [
+                    match.to_dict()
+                    for match in intel_matches
+                ]
+
+            is_ioc_match = (
+                best_intel_match is not None
             )
 
             commands = extract_incident_commands(
