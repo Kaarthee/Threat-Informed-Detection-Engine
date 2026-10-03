@@ -1,6 +1,8 @@
 import datetime
+import ipaddress
 import json
 import re
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -746,6 +748,550 @@ class TAXIIIntelProvider:
 
             else:
                 next_url = None
+
+        return indicators
+
+
+
+
+def unix_timestamp_to_iso(
+    value,
+) -> str | None:
+    """Convert a Unix timestamp to an ISO-8601 UTC timestamp."""
+
+    if value in (
+        None,
+        "",
+    ):
+        return None
+
+    try:
+        timestamp = int(
+            value
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+    try:
+        parsed = datetime.datetime.fromtimestamp(
+            timestamp,
+            tz=datetime.timezone.utc,
+        )
+    except (
+        OverflowError,
+        OSError,
+        ValueError,
+    ):
+        return None
+
+    return parsed.isoformat().replace(
+        "+00:00",
+        "Z",
+    )
+
+
+def normalize_misp_attribute_type(
+    attribute_type: str,
+    value: str,
+) -> str | None:
+    """Map supported MISP attribute types to the common indicator model."""
+
+    normalized = attribute_type.strip().lower()
+
+    if normalized in {
+        "ip-src",
+        "ip-dst",
+        "ip-src|port",
+        "ip-dst|port",
+    }:
+        ip_value = value.split(
+            "|",
+            1,
+        )[0].strip()
+
+        try:
+            parsed_ip = ipaddress.ip_address(
+                ip_value
+            )
+        except ValueError:
+            return None
+
+        if parsed_ip.version == 4:
+            return "ipv4"
+
+        return "ipv6"
+
+    mapping = {
+        "domain": "domain",
+        "hostname": "domain",
+        "url": "url",
+        "sha256": "sha256",
+    }
+
+    return mapping.get(
+        normalized
+    )
+
+
+def normalize_misp_attribute_value(
+    attribute_type: str,
+    value: str,
+) -> str:
+    """Normalize the value portion of supported MISP attributes."""
+
+    normalized = attribute_type.strip().lower()
+
+    if normalized in {
+        "ip-src|port",
+        "ip-dst|port",
+    }:
+        return value.split(
+            "|",
+            1,
+        )[0].strip()
+
+    if normalized == "sha256":
+        return value.lower()
+
+    return value.strip()
+
+
+def extract_misp_tags(
+    attribute: dict,
+) -> list[str]:
+    """Extract tag names attached to a MISP attribute."""
+
+    raw_tags = attribute.get(
+        "Tag",
+        [],
+    )
+
+    if not isinstance(
+        raw_tags,
+        list,
+    ):
+        return []
+
+    tags: list[str] = []
+
+    for tag in raw_tags:
+        if isinstance(
+            tag,
+            dict,
+        ):
+            name = tag.get(
+                "name"
+            )
+
+            if isinstance(
+                name,
+                str,
+            ):
+                tags.append(
+                    name
+                )
+
+        elif isinstance(
+            tag,
+            str,
+        ):
+            tags.append(
+                tag
+            )
+
+    return tags
+
+
+def misp_attribute_to_indicator(
+    attribute: dict,
+    source_name: str,
+    provenance: dict,
+) -> ThreatIntelIndicator | None:
+    """Convert one supported MISP attribute into the common model."""
+
+    if not isinstance(
+        attribute,
+        dict,
+    ):
+        return None
+
+    attribute_type = attribute.get(
+        "type"
+    )
+    value = attribute.get(
+        "value"
+    )
+
+    if (
+        not isinstance(
+            attribute_type,
+            str,
+        )
+        or not isinstance(
+            value,
+            str,
+        )
+    ):
+        return None
+
+    indicator_type = (
+        normalize_misp_attribute_type(
+            attribute_type,
+            value,
+        )
+    )
+
+    if indicator_type is None:
+        return None
+
+    normalized_value = (
+        normalize_misp_attribute_value(
+            attribute_type,
+            value,
+        )
+    )
+
+    if not normalized_value:
+        return None
+
+    deleted = bool(
+        attribute.get(
+            "deleted",
+            False,
+        )
+    )
+
+    first_seen = attribute.get(
+        "first_seen"
+    )
+    last_seen = attribute.get(
+        "last_seen"
+    )
+
+    if not isinstance(
+        first_seen,
+        str,
+    ):
+        first_seen = None
+
+    if not isinstance(
+        last_seen,
+        str,
+    ):
+        last_seen = None
+
+    timestamp = unix_timestamp_to_iso(
+        attribute.get(
+            "timestamp"
+        )
+    )
+
+    if first_seen is None:
+        first_seen = timestamp
+
+    if last_seen is None:
+        last_seen = timestamp
+
+    event_id = attribute.get(
+        "event_id"
+    )
+
+    attribute_id = attribute.get(
+        "id"
+    )
+
+    attribute_uuid = attribute.get(
+        "uuid"
+    )
+
+    return ThreatIntelIndicator(
+        value=normalized_value,
+        type=indicator_type,
+        source=source_name,
+        confidence=None,
+        source_reliability=None,
+        first_seen=first_seen,
+        last_seen=last_seen,
+        expires_at=None,
+        active=not deleted,
+        tags=extract_misp_tags(
+            attribute
+        ),
+        external_id=(
+            str(attribute_id)
+            if attribute_id is not None
+            else None
+        ),
+        stix_id=None,
+        provenance={
+            **provenance,
+            "event_id": (
+                str(event_id)
+                if event_id is not None
+                else None
+            ),
+            "attribute_id": (
+                str(attribute_id)
+                if attribute_id is not None
+                else None
+            ),
+            "attribute_uuid": (
+                str(attribute_uuid)
+                if attribute_uuid is not None
+                else None
+            ),
+            "attribute_type": attribute_type,
+            "category": attribute.get(
+                "category"
+            ),
+            "comment": attribute.get(
+                "comment"
+            ),
+            "to_ids": attribute.get(
+                "to_ids"
+            ),
+        },
+    )
+
+
+class MISPIntelProvider:
+    """
+    Retrieve supported indicators from the MISP REST API.
+
+    The provider uses the attributes/restSearch endpoint and converts
+    supported MISP attributes into ThreatIntelIndicator objects.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        source_name: str = "MISP",
+        timeout_seconds: int = 10,
+        verify_ssl: bool = True,
+        search_payload: dict | None = None,
+    ):
+        self.base_url = base_url.rstrip(
+            "/"
+        )
+        self.api_key = api_key
+        self.source_name = source_name
+        self.timeout_seconds = timeout_seconds
+        self.verify_ssl = verify_ssl
+        self.search_payload = (
+            search_payload
+            if search_payload is not None
+            else {
+                "returnFormat": "json",
+                "published": True,
+            }
+        )
+
+    @property
+    def rest_search_url(
+        self,
+    ) -> str:
+        """Return the MISP attribute search endpoint."""
+
+        return (
+            f"{self.base_url}/attributes/restSearch"
+        )
+
+    def _build_request(
+        self,
+    ) -> urllib.request.Request:
+        """Build an authenticated MISP REST request."""
+
+        body = json.dumps(
+            self.search_payload
+        ).encode(
+            "utf-8"
+        )
+
+        return urllib.request.Request(
+            url=self.rest_search_url,
+            data=body,
+            headers={
+                "Authorization": self.api_key,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+    def _fetch_json(
+        self,
+    ) -> dict | list:
+        """Fetch and decode a MISP JSON response."""
+
+        request = self._build_request()
+
+        ssl_context = None
+
+        if not self.verify_ssl:
+            ssl_context = (
+                ssl._create_unverified_context()
+            )
+
+        try:
+            with urllib.request.urlopen(
+                request,
+                timeout=self.timeout_seconds,
+                context=ssl_context,
+            ) as response:
+                payload = response.read()
+
+        except (
+            urllib.error.HTTPError,
+            urllib.error.URLError,
+            TimeoutError,
+        ) as error:
+            raise ThreatIntelError(
+                "MISP request failed for "
+                f"{self.rest_search_url}: {error}"
+            ) from error
+
+        try:
+            data = json.loads(
+                payload.decode(
+                    "utf-8"
+                )
+            )
+
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+        ) as error:
+            raise ThreatIntelError(
+                "Invalid MISP JSON response from "
+                f"{self.rest_search_url}"
+            ) from error
+
+        if not isinstance(
+            data,
+            (
+                dict,
+                list,
+            ),
+        ):
+            raise ThreatIntelError(
+                "MISP response must be a JSON object or list"
+            )
+
+        return data
+
+    def _extract_attributes(
+        self,
+        payload: dict | list,
+    ) -> list[dict]:
+        """Extract attribute dictionaries from common MISP response shapes."""
+
+        if isinstance(
+            payload,
+            list,
+        ):
+            return [
+                item
+                for item in payload
+                if isinstance(
+                    item,
+                    dict,
+                )
+            ]
+
+        response = payload.get(
+            "response"
+        )
+
+        if isinstance(
+            response,
+            dict,
+        ):
+            attributes = response.get(
+                "Attribute"
+            )
+
+            if isinstance(
+                attributes,
+                list,
+            ):
+                return [
+                    item
+                    for item in attributes
+                    if isinstance(
+                        item,
+                        dict,
+                    )
+                ]
+
+        if isinstance(
+            response,
+            list,
+        ):
+            return [
+                item
+                for item in response
+                if isinstance(
+                    item,
+                    dict,
+                )
+            ]
+
+        attributes = payload.get(
+            "Attribute"
+        )
+
+        if isinstance(
+            attributes,
+            list,
+        ):
+            return [
+                item
+                for item in attributes
+                if isinstance(
+                    item,
+                    dict,
+                )
+            ]
+
+        raise ThreatIntelError(
+            "MISP response did not contain an attribute list"
+        )
+
+    def load(
+        self,
+    ) -> list[ThreatIntelIndicator]:
+        """Fetch and normalize supported MISP attributes."""
+
+        payload = self._fetch_json()
+
+        attributes = self._extract_attributes(
+            payload
+        )
+
+        indicators: list[
+            ThreatIntelIndicator
+        ] = []
+
+        for attribute in attributes:
+            indicator = (
+                misp_attribute_to_indicator(
+                    attribute=attribute,
+                    source_name=self.source_name,
+                    provenance={
+                        "provider": "misp",
+                        "url": self.rest_search_url,
+                    },
+                )
+            )
+
+            if indicator is not None:
+                indicators.append(
+                    indicator
+                )
 
         return indicators
 

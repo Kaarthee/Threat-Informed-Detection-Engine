@@ -7,11 +7,13 @@ from pathlib import Path
 
 from src.threat_intel import (
     LocalJSONIntelProvider,
+    MISPIntelProvider,
     STIXIntelProvider,
     TAXIIIntelProvider,
     ThreatIntelError,
     ThreatIntelIndicator,
     ThreatIntelStore,
+    misp_attribute_to_indicator,
     normalize_indicator_type,
     parse_stix_indicator_pattern,
 )
@@ -547,6 +549,293 @@ class TestTAXIIProvider(unittest.TestCase):
                 "Accept"
             ),
             "application/taxii+json;version=2.1",
+        )
+
+
+
+class TestMISPProvider(unittest.TestCase):
+
+    def setUp(self):
+        self.provider = MISPIntelProvider(
+            "https://misp.example.test",
+            api_key="secret-key",
+            source_name="Test MISP",
+        )
+
+    def test_ip_src_attribute_is_normalized(self):
+        indicator = misp_attribute_to_indicator(
+            attribute={
+                "id": "101",
+                "uuid": "uuid-101",
+                "event_id": "500",
+                "type": "ip-src",
+                "value": "45.141.215.90",
+                "category": "Network activity",
+                "to_ids": True,
+                "timestamp": "1790985600",
+                "Tag": [
+                    {
+                        "name": "tlp:amber"
+                    }
+                ],
+            },
+            source_name="Test MISP",
+            provenance={
+                "provider": "misp",
+            },
+        )
+
+        self.assertIsNotNone(
+            indicator
+        )
+
+        self.assertEqual(
+            indicator.type,
+            "ipv4",
+        )
+
+        self.assertEqual(
+            indicator.value,
+            "45.141.215.90",
+        )
+
+        self.assertEqual(
+            indicator.tags,
+            [
+                "tlp:amber"
+            ],
+        )
+
+        self.assertEqual(
+            indicator.external_id,
+            "101",
+        )
+
+        self.assertEqual(
+            indicator.provenance[
+                "event_id"
+            ],
+            "500",
+        )
+
+        self.assertEqual(
+            indicator.provenance[
+                "attribute_uuid"
+            ],
+            "uuid-101",
+        )
+
+    def test_ip_with_port_strips_port(self):
+        indicator = misp_attribute_to_indicator(
+            attribute={
+                "type": "ip-src|port",
+                "value": "203.0.113.50|22",
+            },
+            source_name="Test MISP",
+            provenance={
+                "provider": "misp",
+            },
+        )
+
+        self.assertIsNotNone(
+            indicator
+        )
+
+        self.assertEqual(
+            indicator.type,
+            "ipv4",
+        )
+
+        self.assertEqual(
+            indicator.value,
+            "203.0.113.50",
+        )
+
+    def test_domain_url_and_sha256_are_supported(self):
+        sha256_value = (
+            "A" * 64
+        )
+
+        cases = [
+            (
+                "domain",
+                "evil.example",
+                "domain",
+                "evil.example",
+            ),
+            (
+                "url",
+                "https://evil.example/a",
+                "url",
+                "https://evil.example/a",
+            ),
+            (
+                "sha256",
+                sha256_value,
+                "sha256",
+                sha256_value.lower(),
+            ),
+        ]
+
+        for (
+            attribute_type,
+            value,
+            expected_type,
+            expected_value,
+        ) in cases:
+            with self.subTest(
+                attribute_type=attribute_type
+            ):
+                indicator = (
+                    misp_attribute_to_indicator(
+                        attribute={
+                            "type": attribute_type,
+                            "value": value,
+                        },
+                        source_name="Test MISP",
+                        provenance={
+                            "provider": "misp",
+                        },
+                    )
+                )
+
+                self.assertIsNotNone(
+                    indicator
+                )
+
+                self.assertEqual(
+                    indicator.type,
+                    expected_type,
+                )
+
+                self.assertEqual(
+                    indicator.value,
+                    expected_value,
+                )
+
+    def test_deleted_attribute_becomes_inactive(self):
+        indicator = misp_attribute_to_indicator(
+            attribute={
+                "type": "ip-dst",
+                "value": "8.8.8.8",
+                "deleted": True,
+            },
+            source_name="Test MISP",
+            provenance={
+                "provider": "misp",
+            },
+        )
+
+        self.assertIsNotNone(
+            indicator
+        )
+
+        self.assertFalse(
+            indicator.active
+        )
+
+    def test_api_key_header_is_added(self):
+        request = self.provider._build_request()
+
+        self.assertEqual(
+            request.get_header(
+                "Authorization"
+            ),
+            "secret-key",
+        )
+
+        self.assertEqual(
+            request.get_header(
+                "Accept"
+            ),
+            "application/json",
+        )
+
+        self.assertEqual(
+            request.get_header(
+                "Content-type"
+            ),
+            "application/json",
+        )
+
+    def test_malformed_response_raises_error(self):
+        with mock.patch.object(
+            self.provider,
+            "_fetch_json",
+            return_value={
+                "response": {
+                    "Attribute": "not-a-list"
+                }
+            },
+        ):
+            with self.assertRaises(
+                ThreatIntelError
+            ):
+                self.provider.load()
+
+    def test_unsupported_attribute_type_is_skipped(self):
+        with mock.patch.object(
+            self.provider,
+            "_fetch_json",
+            return_value={
+                "response": {
+                    "Attribute": [
+                        {
+                            "type": "filename",
+                            "value": "evil.exe",
+                        }
+                    ]
+                }
+            },
+        ):
+            indicators = self.provider.load()
+
+        self.assertEqual(
+            indicators,
+            [],
+        )
+
+    def test_loads_attribute_response(self):
+        payload = {
+            "response": {
+                "Attribute": [
+                    {
+                        "id": "200",
+                        "event_id": "900",
+                        "type": "ip-src",
+                        "value": "198.51.100.10",
+                        "Tag": [
+                            {
+                                "name": "source:test"
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+
+        with mock.patch.object(
+            self.provider,
+            "_fetch_json",
+            return_value=payload,
+        ):
+            indicators = self.provider.load()
+
+        self.assertEqual(
+            len(indicators),
+            1,
+        )
+
+        self.assertEqual(
+            indicators[0].source,
+            "Test MISP",
+        )
+
+        self.assertEqual(
+            indicators[0].provenance[
+                "provider"
+            ],
+            "misp",
         )
 
 
