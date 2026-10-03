@@ -1367,15 +1367,84 @@ class ThreatIntelStore:
             list[ThreatIntelIndicator],
         ] = {}
 
+        self.provider_failures: list[
+            dict
+        ] = []
+
+        self.provider_successes: list[
+            dict
+        ] = []
+
+    def _provider_name(
+        self,
+        provider,
+    ) -> str:
+        """Return a readable name for provider status reporting."""
+
+        source_name = getattr(
+            provider,
+            "source_name",
+            None,
+        )
+
+        if isinstance(
+            source_name,
+            str,
+        ) and source_name:
+            return source_name
+
+        return provider.__class__.__name__
+
     def load(self) -> None:
-        """Load and index indicators from all configured providers."""
+        """
+        Load and index indicators from all configured providers.
+
+        A provider failure is isolated so healthy providers can still
+        contribute threat intelligence. Failures are recorded in
+        provider_failures for visibility and troubleshooting.
+        """
 
         self.indicators = []
         self.index = {}
+        self.provider_failures = []
+        self.provider_successes = []
 
         for provider in self.providers:
-            provider_indicators = (
-                provider.load()
+            provider_name = (
+                self._provider_name(
+                    provider
+                )
+            )
+
+            try:
+                provider_indicators = (
+                    provider.load()
+                )
+
+            except ThreatIntelError as error:
+                self.provider_failures.append(
+                    {
+                        "provider": provider_name,
+                        "provider_class": (
+                            provider.__class__.__name__
+                        ),
+                        "error": str(
+                            error
+                        ),
+                    }
+                )
+                continue
+
+            self.provider_successes.append(
+                {
+                    "provider": provider_name,
+                    "provider_class": (
+                        provider.__class__.__name__
+                    ),
+                    "indicator_count": len(
+                        provider_indicators
+                    ),
+                }
             )
 
             for indicator in provider_indicators:
@@ -1488,3 +1557,4 @@ class ThreatIntelStore:
                 reference_time=reference_time,
             )
         ]
+

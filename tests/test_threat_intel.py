@@ -839,6 +839,155 @@ class TestMISPProvider(unittest.TestCase):
         )
 
 
+
+class TestThreatIntelProviderIsolation(unittest.TestCase):
+
+    class HealthyProvider:
+        source_name = "Healthy Provider"
+
+        def load(self):
+            return [
+                ThreatIntelIndicator(
+                    value="203.0.113.77",
+                    type="ipv4",
+                    source=self.source_name,
+                    confidence=70,
+                    active=True,
+                )
+            ]
+
+    class FailingProvider:
+        source_name = "Failing Provider"
+
+        def load(self):
+            raise ThreatIntelError(
+                "simulated provider failure"
+            )
+
+    def test_failed_provider_does_not_stop_healthy_provider(self):
+        store = ThreatIntelStore(
+            providers=[
+                self.FailingProvider(),
+                self.HealthyProvider(),
+            ]
+        )
+
+        store.load()
+
+        self.assertEqual(
+            len(store.indicators),
+            1,
+        )
+
+        matches = store.lookup_ip(
+            "203.0.113.77"
+        )
+
+        self.assertEqual(
+            len(matches),
+            1,
+        )
+
+        self.assertEqual(
+            matches[0].source,
+            "Healthy Provider",
+        )
+
+    def test_provider_failure_is_recorded(self):
+        store = ThreatIntelStore(
+            providers=[
+                self.FailingProvider()
+            ]
+        )
+
+        store.load()
+
+        self.assertEqual(
+            len(store.provider_failures),
+            1,
+        )
+
+        failure = store.provider_failures[
+            0
+        ]
+
+        self.assertEqual(
+            failure["provider"],
+            "Failing Provider",
+        )
+
+        self.assertEqual(
+            failure["provider_class"],
+            "FailingProvider",
+        )
+
+        self.assertIn(
+            "simulated provider failure",
+            failure["error"],
+        )
+
+    def test_provider_success_is_recorded(self):
+        store = ThreatIntelStore(
+            providers=[
+                self.HealthyProvider()
+            ]
+        )
+
+        store.load()
+
+        self.assertEqual(
+            len(store.provider_successes),
+            1,
+        )
+
+        success = store.provider_successes[
+            0
+        ]
+
+        self.assertEqual(
+            success["provider"],
+            "Healthy Provider",
+        )
+
+        self.assertEqual(
+            success["provider_class"],
+            "HealthyProvider",
+        )
+
+        self.assertEqual(
+            success["indicator_count"],
+            1,
+        )
+
+    def test_healthy_store_has_no_failures(self):
+        store = ThreatIntelStore(
+            providers=[
+                self.HealthyProvider()
+            ]
+        )
+
+        store.load()
+
+        self.assertEqual(
+            store.provider_failures,
+            [],
+        )
+
+    def test_failure_does_not_create_success_record(self):
+        store = ThreatIntelStore(
+            providers=[
+                self.FailingProvider()
+            ]
+        )
+
+        store.load()
+
+        self.assertEqual(
+            store.provider_successes,
+            [],
+        )
+
+
 class TestThreatIntelStore(unittest.TestCase):
 
     def setUp(self):
